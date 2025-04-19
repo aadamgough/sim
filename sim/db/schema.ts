@@ -221,7 +221,7 @@ export const customTools = pgTable('custom_tools', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })
 
-export const chatbotDeployment = pgTable('chatbot', {
+export const chatDeployment = pgTable('chat', {
     id: text('id').primaryKey(),
     workflowId: text('workflow_id')
       .notNull()
