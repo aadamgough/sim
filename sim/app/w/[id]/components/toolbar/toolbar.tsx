@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useSidebarStore } from '@/stores/sidebar/store'
 import { getAllBlocks, getBlocksByCategory } from '@/blocks'
 import { BlockCategory } from '@/blocks/types'
+import { LoopConfig } from '@/blocks/blocks/loop'
 import { ToolbarBlock } from './components/toolbar-block/toolbar-block'
 import { ToolbarTabs } from './components/toolbar-tabs/toolbar-tabs'
 
@@ -20,7 +21,9 @@ export function Toolbar() {
   const blocks = useMemo(() => {
     const filteredBlocks = !searchQuery.trim() ? getBlocksByCategory(activeTab) : getAllBlocks()
 
-    return filteredBlocks.filter((block) => {
+    const allBlocks = activeTab === 'blocks' ? [LoopConfig, ...filteredBlocks] : filteredBlocks
+
+    return allBlocks.filter((block) => {
       if (block.type === 'starter' || block.hideFromToolbar) return false
 
       return (

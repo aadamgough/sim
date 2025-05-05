@@ -33,6 +33,8 @@ import { WorkflowEdge } from './components/workflow-edge/workflow-edge'
 import { LoopInput } from './components/workflow-loop/components/loop-input/loop-input'
 import { LoopLabel } from './components/workflow-loop/components/loop-label/loop-label'
 import { createLoopNode, getRelativeLoopPosition } from './components/workflow-loop/workflow-loop'
+import { LoopNode } from '@/components/flow/nodes/loop-node'
+import { LoopConfig } from '@/blocks/blocks/loop'
 
 const logger = createLogger('Workflow')
 
@@ -41,6 +43,7 @@ const nodeTypes: NodeTypes = {
   workflowBlock: WorkflowBlock,
   loopLabel: LoopLabel,
   loopInput: LoopInput,
+  loop: LoopNode,
 }
 const edgeTypes: EdgeTypes = { workflowEdge: WorkflowEdge }
 
@@ -138,17 +141,30 @@ function WorkflowContent() {
       if (!type) return
       if (type === 'connectionBlock') return
 
-      const blockConfig = getBlock(type)
-      if (!blockConfig) {
-        logger.error('Invalid block type:', { type })
-        return
-      }
-
       // Calculate the center position of the viewport
       const centerPosition = project({
         x: window.innerWidth / 2,
         y: window.innerHeight / 2,
       })
+
+      // Handle loop nodes differently
+      if (type === 'loop') {
+        const id = crypto.randomUUID()
+        addBlock(id, type, 'Loop', centerPosition, {
+          loopType: 'while',
+          condition: '',
+          count: 1,
+          collection: '',
+          extent: 'parent' // Ensure child nodes stay within parent bounds
+        })
+        return
+      }
+
+      const blockConfig = getBlock(type)
+      if (!blockConfig) {
+        logger.error('Invalid block type:', { type })
+        return
+      }
 
       // Create a new block with a unique ID
       const id = crypto.randomUUID()
@@ -203,6 +219,19 @@ function WorkflowContent() {
           x: event.clientX - reactFlowBounds.left,
           y: event.clientY - reactFlowBounds.top,
         })
+
+        // Handle loop nodes differently
+        if (data.type === 'loop') {
+          const id = crypto.randomUUID()
+          addBlock(id, data.type, 'Loop', position, {
+            loopType: 'while',
+            condition: '',
+            count: 1,
+            collection: '',
+            extent: 'parent' // Ensure child nodes stay within parent bounds
+          })
+          return
+        }
 
         const blockConfig = getBlock(data.type)
         if (!blockConfig) {
@@ -315,6 +344,26 @@ function WorkflowContent() {
     Object.entries(blocks).forEach(([blockId, block]) => {
       if (!block.type || !block.name) {
         logger.warn(`Skipping invalid block: ${blockId}`, { block })
+        return
+      }
+
+      // Handle loop nodes differently
+      if (block.type === 'loop') {
+        nodeArray.push({
+          id: block.id,
+          type: 'loop',
+          position: block.position,
+          dragHandle: '.workflow-drag-handle',
+          data: {
+            ...block.data,
+            label: block.name,
+            loopType: block.data?.loopType || 'while',
+            condition: block.data?.condition || '',
+            count: block.data?.count || 1,
+            collection: block.data?.collection || ''
+          },
+          extent: 'parent' // Ensure child nodes stay within parent bounds
+        })
         return
       }
 

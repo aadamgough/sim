@@ -17,6 +17,7 @@ export interface BlockState {
   horizontalHandles?: boolean
   isWide?: boolean
   height?: number
+  data?: Record<string, any> // Additional data for custom nodes
 }
 
 export interface SubBlockState {
@@ -47,7 +48,7 @@ export interface WorkflowState {
 }
 
 export interface WorkflowActions {
-  addBlock: (id: string, type: string, name: string, position: Position) => void
+  addBlock: (id: string, type: string, name: string, position: Position, data?: Record<string, any>) => void
   updateBlockPosition: (id: string, position: Position) => void
   removeBlock: (id: string) => void
   addEdge: (edge: Edge) => void

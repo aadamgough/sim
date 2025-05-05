@@ -48,8 +48,39 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         set({ needsRedeployment })
       },
 
-      addBlock: (id: string, type: string, name: string, position: Position) => {
+      addBlock: (id: string, type: string, name: string, position: Position, data?: Record<string, any>) => {
         const blockConfig = getBlock(type)
+        
+        // For custom nodes like loop that don't use BlockConfig
+        if (!blockConfig && type === 'loop') {
+          const newState = {
+            blocks: {
+              ...get().blocks,
+              [id]: {
+                id,
+                type,
+                name,
+                position,
+                subBlocks: {},
+                outputs: {},
+                enabled: true,
+                horizontalHandles: true,
+                isWide: false,
+                height: 0,
+                data
+              },
+            },
+            edges: [...get().edges],
+            loops: { ...get().loops },
+          }
+
+          set(newState)
+          pushHistory(set, get, newState, `Add ${type} node`)
+          get().updateLastSaved()
+          workflowSync.sync()
+          return
+        }
+
         if (!blockConfig) return
 
         const subBlocks: Record<string, SubBlockState> = {}
