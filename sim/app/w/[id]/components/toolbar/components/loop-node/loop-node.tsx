@@ -1,22 +1,93 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import { Handle, NodeProps, Position, NodeResizer, useReactFlow } from 'reactflow'
-import { RepeatIcon, X } from 'lucide-react'
+import { RepeatIcon, X, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
+import Editor from 'react-simple-code-editor'
+import { highlight, languages } from 'prismjs'
+import 'prismjs/components/prism-javascript'
+import 'prismjs/themes/prism.css'
 
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   const { deleteElements } = useReactFlow()
   const removeBlock = useWorkflowStore((state) => state.removeBlock)
+  const updateLoopType = useWorkflowStore((state) => state.updateLoopType)
+  const updateLoopIterations = useWorkflowStore((state) => state.updateLoopIterations)
+  const updateLoopForEachItems = useWorkflowStore((state) => state.updateLoopForEachItems)
+
+  // Local state
+  const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
+  const [inputPopoverOpen, setInputPopoverOpen] = useState(false)
+  const [inputValue, setInputValue] = useState(data.count?.toString() || '5')
+  const [editorValue, setEditorValue] = useState(data.collection || '')
 
   const onDelete = useCallback(() => {
     logger.info('Deleting loop node:', { id })
     removeBlock(id)
     deleteElements({ nodes: [{ id }] })
   }, [deleteElements, id, removeBlock])
+
+  // Loop type management
+  const getLoopLabel = () => {
+    switch (data.loopType) {
+      case 'for':
+        return 'For loop'
+      case 'forEach':
+        return 'For each'
+      default:
+        return 'Loop'
+    }
+  }
+
+  const handleLoopTypeChange = (type: 'for' | 'forEach') => {
+    updateLoopType(id, type)
+    setLabelPopoverOpen(false)
+  }
+
+  // Input management
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const sanitizedValue = e.target.value.replace(/[^0-9]/g, '')
+    const numValue = parseInt(sanitizedValue)
+
+    if (!isNaN(numValue)) {
+      setInputValue(Math.min(50, numValue).toString())
+    } else {
+      setInputValue(sanitizedValue)
+    }
+  }
+
+  const handleInputSave = () => {
+    const value = parseInt(inputValue)
+    if (!isNaN(value)) {
+      const newValue = Math.min(50, Math.max(1, value))
+      updateLoopIterations(id, newValue)
+      setInputValue(newValue.toString())
+    }
+    setInputPopoverOpen(false)
+  }
+
+  const handleEditorChange = (value: string) => {
+    setEditorValue(value)
+    updateLoopForEachItems(id, value)
+  }
+
+  const getInputLabel = () => {
+    switch (data.loopType) {
+      case 'for':
+        return `Iterations: ${data.count || 5}`
+      case 'forEach':
+        return 'Items'
+      default:
+        return `Iterations: ${data.count || 5}`
+    }
+  }
 
   logger.info('Rendering loop node:', { 
     id, 
@@ -61,11 +132,109 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           <X className="h-4 w-4" />
         </button>
 
-        <div className="flex items-center gap-2 mb-4 workflow-drag-handle cursor-move">
-          <div className="flex items-center justify-center w-7 h-7 rounded bg-[#4A5568]">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center justify-center w-7 h-7 rounded bg-[#4A5568] workflow-drag-handle cursor-move">
             <RepeatIcon className="w-5 h-5 text-white" />
           </div>
-          <span className="font-medium text-md">{data.label || 'Loop'}</span>
+          
+          {/* Loop Type Selection */}
+          <Popover open={labelPopoverOpen} onOpenChange={setLabelPopoverOpen}>
+            <PopoverTrigger asChild>
+              <Badge
+                variant="outline"
+                className={cn(
+                  'bg-background border-border text-foreground font-medium pr-1.5 pl-2.5 py-0.5 text-sm',
+                  'hover:bg-accent/50 transition-colors duration-150 cursor-pointer',
+                  'flex items-center gap-1'
+                )}
+              >
+                {getLoopLabel()}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              </Badge>
+            </PopoverTrigger>
+            <PopoverContent className="w-36 p-1" align="start">
+              <div className="text-sm">
+                <div
+                  className={cn(
+                    'px-2 py-1.5 rounded-md cursor-pointer hover:bg-accent/50 transition-colors duration-150',
+                    data.loopType === 'for' && 'bg-accent'
+                  )}
+                  onClick={() => handleLoopTypeChange('for')}
+                >
+                  <span>For loop</span>
+                </div>
+                <div
+                  className={cn(
+                    'px-2 py-1.5 rounded-md cursor-pointer hover:bg-accent/50 transition-colors duration-150',
+                    data.loopType === 'forEach' && 'bg-accent'
+                  )}
+                  onClick={() => handleLoopTypeChange('forEach')}
+                >
+                  <span>For each</span>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Loop Input Configuration */}
+          <Popover open={inputPopoverOpen} onOpenChange={setInputPopoverOpen}>
+            <PopoverTrigger asChild>
+              <Badge
+                variant="outline"
+                className={cn(
+                  'bg-background border-border text-foreground font-medium pr-1.5 pl-2.5 py-0.5 text-sm',
+                  'hover:bg-accent/50 transition-colors duration-150 cursor-pointer',
+                  'flex items-center gap-1'
+                )}
+              >
+                {getInputLabel()}
+                <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              </Badge>
+            </PopoverTrigger>
+            <PopoverContent 
+              className={cn('p-3', data.loopType !== 'for' ? 'w-72' : 'w-48')} 
+              align="start"
+            >
+              <div className="space-y-2">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {data.loopType === 'for' ? 'Loop Iterations' : 'Collection Items'}
+                </div>
+
+                {data.loopType === 'for' ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="text"
+                      value={inputValue}
+                      onChange={handleInputChange}
+                      onBlur={handleInputSave}
+                      className="h-8 text-sm"
+                    />
+                  </div>
+                ) : (
+                  <div className="relative min-h-[80px] rounded-md bg-background font-mono text-sm px-3 pt-2 pb-3 border border-input">
+                    <Editor
+                      value={editorValue}
+                      onValueChange={handleEditorChange}
+                      highlight={(code) => highlight(code, languages.javascript, 'javascript')}
+                      padding={0}
+                      style={{
+                        fontFamily: 'monospace',
+                        lineHeight: '21px',
+                      }}
+                      className="focus:outline-none w-full"
+                      textareaClassName="focus:outline-none focus:ring-0 bg-transparent resize-none w-full"
+                    />
+                  </div>
+                )}
+
+                <div className="text-[10px] text-muted-foreground">
+                  {data.loopType === 'for'
+                    ? 'Enter a number between 1 and 50'
+                    : 'Array or object to iterate over'}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
 
         <div className="flex-1 border border-dashed border-gray-300 rounded-md p-2">
