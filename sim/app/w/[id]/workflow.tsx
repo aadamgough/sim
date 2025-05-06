@@ -34,7 +34,7 @@ import { WorkflowBlock } from './components/workflow-block/workflow-block'
 import { WorkflowEdge } from './components/workflow-edge/workflow-edge'
 import { LoopInput } from './components/workflow-loop/components/loop-input/loop-input'
 import { LoopLabel } from './components/workflow-loop/components/loop-label/loop-label'
-import { LoopNodeComponent } from '@/app/w/[id]/components/toolbar/components/loop-node/loop-node'
+import { LoopNodeComponent } from '@/app/w/[id]/components/loop-node/loop-node'
 import { createLoopNode, getRelativeLoopPosition } from './components/workflow-loop/workflow-loop'
 
 const logger = createLogger('Workflow')
@@ -70,7 +70,7 @@ function WorkflowContent() {
 
   // Store access
   const { workflows, setActiveWorkflow, createWorkflow } = useWorkflowRegistry()
-  const { blocks, edges, loops, addBlock, updateBlockPosition, addEdge, removeEdge } =
+  const { blocks, edges, loops, addBlock, updateBlockPosition, updateNodeDimensions, addEdge, removeEdge } =
     useWorkflowStore()
   const { setValue: setSubBlockValue } = useSubBlockStore()
   const { markAllAsRead } = useNotificationStore()
@@ -375,15 +375,18 @@ function WorkflowContent() {
           position: block.position,
           dragHandle: '.workflow-drag-handle',
           style: {
-            width: 800,
-            height: 400,
+            width: block.data?.width || 800,
+            height: block.data?.height || 400,
           },
           data: {
+            ...block.data,
             label: block.name,
             loopType: block.data?.loopType || 'for',
             condition: block.data?.condition || '',
             count: block.data?.count || 1,
             collection: block.data?.collection || '',
+            width: block.data?.width || 800,
+            height: block.data?.height || 400,
           },
         })
         return
@@ -542,13 +545,45 @@ function WorkflowContent() {
       setNodes((prevNodes) =>
         prevNodes.map((node) => {
           if (node.id === dragNode.id) {
+            // Set state on dragged node
             const newState = overlappingNode?.type === 'loop' ? 'valid' : undefined
-            logger.info('Setting node state:', { nodeId: node.id, state: newState })
+            logger.info('Setting dragged node state:', { nodeId: node.id, state: newState })
             return {
               ...node,
               data: {
                 ...node.data,
                 state: newState,
+              },
+            }
+          }
+          if (overlappingNode && node.id === overlappingNode.id && overlappingNode.type === 'loop') {
+            // Set state on loop node
+            logger.info('Setting loop node state:', { nodeId: node.id, state: 'valid' })
+            return {
+              ...node,
+              style: {
+                ...node.style,
+                borderColor: 'rgb(34, 197, 94)', // green-500
+                backgroundColor: 'rgba(34, 197, 94, 0.05)', // green-50/5
+              },
+              data: {
+                ...node.data,
+                state: 'valid',
+              },
+            }
+          }
+          // Reset state on other loop nodes
+          if (node.type === 'loop' && (!overlappingNode || node.id !== overlappingNode.id)) {
+            return {
+              ...node,
+              style: {
+                ...node.style,
+                borderColor: undefined,
+                backgroundColor: undefined,
+              },
+              data: {
+                ...node.data,
+                state: undefined,
               },
             }
           }
@@ -580,6 +615,12 @@ function WorkflowContent() {
         
         if (!loopElement) return
 
+        // Get the ReactFlow container bounds
+        const reactFlowContainer = document.querySelector('.react-flow')
+        if (!reactFlowContainer) return
+        const reactFlowBounds = reactFlowContainer.getBoundingClientRect()
+        
+        // Get the loop node's bounds
         const loopBounds = loopElement.getBoundingClientRect()
         logger.info('Loop bounds:', { 
           left: loopBounds.left, 
@@ -588,14 +629,42 @@ function WorkflowContent() {
           height: loopBounds.height
         })
 
+        // Get the dragged node's dimensions
+        const draggedNodeElement = document.querySelector(`[data-id="${dragNode.id}"]`)
+        if (!draggedNodeElement) return
+        const draggedNodeBounds = draggedNodeElement.getBoundingClientRect()
+
         // Calculate relative position within the loop
-        const relativePosition = {
+        const relativePosition = project({
           x: evt.clientX - loopBounds.left,
-          y: evt.clientY - loopBounds.top,
+          y: evt.clientY - loopBounds.top
+        })
+
+        // Add padding to ensure the node is placed within the loop's bounds
+        const PADDING = {
+          TOP: 80, // Increased to account for loop header
+          RIGHT: 50,
+          BOTTOM: 50,
+          LEFT: 50,
         }
+
+        // Ensure the node is placed within the loop's bounds
+        relativePosition.x = Math.max(PADDING.LEFT, Math.min(
+          loopBounds.width - draggedNodeBounds.width - PADDING.RIGHT,
+          relativePosition.x
+        ))
+        relativePosition.y = Math.max(PADDING.TOP, Math.min(
+          loopBounds.height - draggedNodeBounds.height - PADDING.BOTTOM,
+          relativePosition.y
+        ))
+
         logger.info('Calculated relative position:', relativePosition)
 
-        // Update node in React Flow
+        // Calculate new loop dimensions based on the dragged node
+        const newWidth = Math.max(800, relativePosition.x + draggedNodeBounds.width + PADDING.RIGHT)
+        const newHeight = Math.max(400, relativePosition.y + draggedNodeBounds.height + PADDING.BOTTOM)
+
+        // Update nodes in React Flow
         setNodes((prevNodes) =>
           prevNodes.map((node) => {
             if (node.id === dragNode.id) {
@@ -609,8 +678,32 @@ function WorkflowContent() {
                 position: relativePosition,
                 parentNode: overlappingNode.id,
                 extent: 'parent',
+                expandParent: true,
                 data: {
                   ...node.data,
+                  state: undefined,
+                },
+              }
+            }
+            if (node.id === overlappingNode.id) {
+              logger.info('Updating loop dimensions:', {
+                nodeId: node.id,
+                width: newWidth,
+                height: newHeight
+              })
+              return {
+                ...node,
+                style: {
+                  ...node.style,
+                  width: newWidth,
+                  height: newHeight,
+                  borderColor: undefined,
+                  backgroundColor: undefined,
+                },
+                data: {
+                  ...node.data,
+                  width: newWidth,
+                  height: newHeight,
                   state: undefined,
                 },
               }
@@ -625,14 +718,65 @@ function WorkflowContent() {
           position: relativePosition
         })
         updateBlockPosition(dragNode.id, relativePosition)
+
+        // Update loop dimensions in workflow store
+        logger.info('Updating loop dimensions in workflow store:', {
+          nodeId: overlappingNode.id,
+          width: newWidth,
+          height: newHeight
+        })
+        updateNodeDimensions(overlappingNode.id, { width: newWidth, height: newHeight })
+
+        // Initialize or update the loop's nodes array in the workflow store
+        const workflowStore = useWorkflowStore.getState()
+        const currentLoops = { ...workflowStore.loops }  // Create a new copy
+        const loopId = overlappingNode.id
+        
+        if (!currentLoops[loopId]) {
+          // Create a new loop entry if it doesn't exist
+          currentLoops[loopId] = {
+            id: loopId,
+            nodes: [dragNode.id],
+            iterations: 5,
+            loopType: 'for',
+            forEachItems: '',
+          }
+        } else if (!currentLoops[loopId].nodes.includes(dragNode.id)) {
+          // Add the dragged node to the existing loop's nodes array
+          currentLoops[loopId] = {
+            ...currentLoops[loopId],
+            nodes: [...currentLoops[loopId].nodes, dragNode.id]
+          }
+        }
+
+        // Update the store with the new loops state
+        useWorkflowStore.setState({ loops: currentLoops })
+
       } else {
         logger.info('Node not dropped on loop, resetting state')
         // Reset any visual feedback state
         setNodes((prevNodes) =>
           prevNodes.map((node) => {
             if (node.id === dragNode.id) {
+              // If the node was previously in a loop, remove it from that loop
+              if (node.parentNode) {
+                const workflowStore = useWorkflowStore.getState()
+                const currentLoops = { ...workflowStore.loops }
+                const previousLoopId = node.parentNode
+                
+                if (currentLoops[previousLoopId]?.nodes) {
+                  currentLoops[previousLoopId] = {
+                    ...currentLoops[previousLoopId],
+                    nodes: currentLoops[previousLoopId].nodes.filter(id => id !== dragNode.id)
+                  }
+                  useWorkflowStore.setState({ loops: currentLoops })
+                }
+              }
+              
               return {
                 ...node,
+                parentNode: undefined,
+                extent: undefined,
                 data: {
                   ...node.data,
                   state: undefined,
@@ -646,7 +790,7 @@ function WorkflowContent() {
 
       overlappingNodeRef.current = null
     },
-    [setNodes, updateBlockPosition]
+    [setNodes, updateBlockPosition, updateNodeDimensions]
   )
 
   if (!isInitialized) {

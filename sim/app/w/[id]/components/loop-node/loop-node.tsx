@@ -16,11 +16,12 @@ import 'prismjs/themes/prism.css'
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
-  const { deleteElements } = useReactFlow()
+  const { deleteElements, getNode } = useReactFlow()
   const removeBlock = useWorkflowStore((state) => state.removeBlock)
   const updateLoopType = useWorkflowStore((state) => state.updateLoopType)
   const updateLoopIterations = useWorkflowStore((state) => state.updateLoopIterations)
   const updateLoopForEachItems = useWorkflowStore((state) => state.updateLoopForEachItems)
+  const updateNodeDimensions = useWorkflowStore((state) => state.updateNodeDimensions)
 
   // Local state
   const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
@@ -89,6 +90,11 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     }
   }
 
+  const handleResize = useCallback((evt: any, { width, height }: { width: number; height: number }) => {
+    logger.info('Loop node resized:', { id, width, height })
+    updateNodeDimensions(id, { width, height })
+  }, [id, updateNodeDimensions])
+
   logger.info('Rendering loop node:', { 
     id, 
     selected, 
@@ -107,19 +113,25 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         lineClassName="border-primary"
         handleClassName="h-3 w-3 bg-primary border-primary"
         keepAspectRatio={false}
-        onResize={(evt, { width, height }) => {
-          logger.info('Loop node resized:', { id, width, height })
-        }}
+        onResize={handleResize}
       />
       <Card 
         className={cn(
           'relative flex flex-col min-w-[300px] min-h-[200px] bg-background/50 p-4',
           'border-2 border-dashed border-gray-400',
-          'transition-colors duration-200',
+          'transition-all duration-200',
           selected && 'ring-2 ring-primary ring-offset-2',
-          'drag-target',
-          data?.state === 'valid' && 'border-green-500',
+          'drag-target'
         )}
+        style={{
+          width: data.width || 800,
+          height: data.height || 400,
+          pointerEvents: 'all',
+          borderColor: data?.state === 'valid' ? 'rgb(34, 197, 94)' : undefined,
+          backgroundColor: data?.state === 'valid' ? 'rgba(34, 197, 94, 0.05)' : undefined,
+          position: 'relative',
+          overflow: 'visible',
+        }}
       >
         <button
           className={cn(
@@ -132,8 +144,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           <X className="h-4 w-4" />
         </button>
 
-        <div className="flex items-center gap-2 mb-4">
-          <div className="flex items-center justify-center w-7 h-7 rounded bg-[#4A5568] workflow-drag-handle cursor-move">
+        <div className="flex items-center gap-2 mb-4 workflow-drag-handle cursor-move">
+          <div className="flex items-center justify-center w-7 h-7 rounded bg-[#40E0D0]">
             <RepeatIcon className="w-5 h-5 text-white" />
           </div>
           
@@ -237,7 +249,12 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           </Popover>
         </div>
 
-        <div className="flex-1 border border-dashed border-gray-300 rounded-md p-2">
+        {/* Container for child nodes */}
+        <div className={cn(
+          "flex-1 border border-dashed rounded-md p-2 transition-all duration-200 mt-4",
+          data?.state === 'valid' ? 'border-green-500/30 bg-green-50/5' : 'border-gray-300',
+          "relative min-h-[100px]"
+        )}>
           {/* Child nodes are rendered here by React Flow */}
         </div>
 

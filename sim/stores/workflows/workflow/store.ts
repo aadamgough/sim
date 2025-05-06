@@ -137,6 +137,25 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         // No sync here as this is a frequent operation during dragging
       },
 
+      updateNodeDimensions: (id: string, dimensions: { width: number; height: number }) => {
+        set((state) => ({
+          blocks: {
+            ...state.blocks,
+            [id]: {
+              ...state.blocks[id],
+              data: {
+                ...state.blocks[id].data,
+                width: dimensions.width,
+                height: dimensions.height,
+              },
+            },
+          },
+          edges: [...state.edges],
+        }))
+        get().updateLastSaved()
+        workflowSync.sync()
+      },
+
       removeBlock: (id: string) => {
         // First, clean up any subblock values for this block
         const subBlockStore = useSubBlockStore.getState()
@@ -163,10 +182,9 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
             },
           }))
         }
-
         // Clean up loops
         Object.entries(newState.loops).forEach(([loopId, loop]) => {
-          if (loop.nodes.includes(id)) {
+          if (loop && loop.nodes && loop.nodes.includes(id)) {
             // If removing this node would leave the loop empty, delete the loop
             if (loop.nodes.length <= 1) {
               delete newState.loops[loopId]

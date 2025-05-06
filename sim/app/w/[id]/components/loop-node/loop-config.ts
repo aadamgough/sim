@@ -6,7 +6,7 @@ export const LoopTool = {
   name: 'Loop',
   description: 'Create a Loop',
   icon: RepeatIcon,
-  bgColor: '#4A5568',
+  bgColor: '#40E0D0',
   data: {
     label: 'Loop',
     loopType: 'while',
@@ -20,9 +20,4 @@ export const LoopTool = {
   },
   dragHandle: '.workflow-drag-handle',
   // Additional properties for workflow store
-  storeData: {
-    iterations: 5,
-    loopType: 'for',
-    nodes: [],
-  }
 } 
