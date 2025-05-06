@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import ReactFlow, {
   Background,
@@ -9,6 +9,8 @@ import ReactFlow, {
   NodeTypes,
   ReactFlowProvider,
   useReactFlow,
+  Node,
+  NodeProps,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import { LoadingAgent } from '@/components/ui/loading-agent'
@@ -32,19 +34,26 @@ import { WorkflowBlock } from './components/workflow-block/workflow-block'
 import { WorkflowEdge } from './components/workflow-edge/workflow-edge'
 import { LoopInput } from './components/workflow-loop/components/loop-input/loop-input'
 import { LoopLabel } from './components/workflow-loop/components/loop-label/loop-label'
+import { LoopNodeComponent } from '@/app/w/[id]/components/toolbar/components/loop-node/loop-node'
 import { createLoopNode, getRelativeLoopPosition } from './components/workflow-loop/workflow-loop'
-import { LoopNode } from '@/components/flow/nodes/loop-node'
-import { LoopConfig } from '@/blocks/blocks/loop'
 
 const logger = createLogger('Workflow')
 
 // Define custom node and edge types
-const nodeTypes: NodeTypes = {
+const nodeTypes = {
   workflowBlock: WorkflowBlock,
   loopLabel: LoopLabel,
   loopInput: LoopInput,
-  loop: LoopNode,
+  loop: LoopNodeComponent,
+} satisfies Record<string, React.ComponentType<NodeProps>>
+
+// Add resizable configuration to the loop node
+const nodeConfig = {
+  loop: {
+    resizable: true,
+  },
 }
+
 const edgeTypes: EdgeTypes = { workflowEdge: WorkflowEdge }
 
 function WorkflowContent() {
@@ -52,11 +61,12 @@ function WorkflowContent() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
   const { isCollapsed: isSidebarCollapsed } = useSidebarStore()
+  const overlappingNodeRef = useRef<Node | null>(null)
 
   // Hooks
   const params = useParams()
   const router = useRouter()
-  const { project } = useReactFlow()
+  const { project, getIntersectingNodes, setNodes } = useReactFlow()
 
   // Store access
   const { workflows, setActiveWorkflow, createWorkflow } = useWorkflowRegistry()
@@ -209,30 +219,50 @@ function WorkflowContent() {
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault()
+      logger.info('Drop event on workflow')
 
       try {
         const data = JSON.parse(event.dataTransfer.getData('application/json'))
-        if (data.type === 'connectionBlock') return
-
+        logger.info('Dropped data:', data)
+        
         const reactFlowBounds = event.currentTarget.getBoundingClientRect()
         const position = project({
           x: event.clientX - reactFlowBounds.left,
           y: event.clientY - reactFlowBounds.top,
         })
+        logger.info('Calculated drop position:', position)
 
-        // Handle loop nodes differently
+        // Handle loop nodes
         if (data.type === 'loop') {
           const id = crypto.randomUUID()
-          addBlock(id, data.type, 'Loop', position, {
-            loopType: 'while',
-            condition: '',
-            count: 1,
-            collection: '',
-            extent: 'parent' // Ensure child nodes stay within parent bounds
+          logger.info('Creating new loop node:', { id })
+          
+          // Add to workflow store first
+          addBlock(id, 'loop', data.name, position, {
+            ...data.storeData,
+            extent: 'parent',
           })
+          logger.info('Added loop to workflow store')
+
+          // Add to React Flow
+          setNodes((nds) => nds.concat({
+            id,
+            type: 'loop',
+            position,
+            dragHandle: data.dragHandle,
+            style: data.style,
+            data: {
+              ...data.data,
+              id,
+              label: data.name,
+            }
+          }))
+          logger.info('Added loop to React Flow')
+          
           return
         }
 
+        // For regular blocks, add them to the workflow store
         const blockConfig = getBlock(data.type)
         if (!blockConfig) {
           logger.error('Invalid block type:', { data })
@@ -251,7 +281,6 @@ function WorkflowContent() {
         if (isAutoConnectEnabled && data.type !== 'starter') {
           const closestBlock = findClosestOutput(position)
           if (closestBlock) {
-            // Get appropriate source handle
             const sourceHandle = determineSourceHandle(closestBlock)
 
             addEdge({
@@ -264,11 +293,11 @@ function WorkflowContent() {
             })
           }
         }
-      } catch (err) {
-        logger.error('Error dropping block:', { err })
+      } catch (error) {
+        logger.error('Error in onDrop:', error)
       }
     },
-    [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle]
+    [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle, setNodes]
   )
 
   // Init workflow
@@ -331,16 +360,7 @@ function WorkflowContent() {
   const nodes = useMemo(() => {
     const nodeArray: any[] = []
 
-    // Add loop group nodes and their labels
-    Object.entries(loops).forEach(([loopId, loop]) => {
-      const loopNodes = createLoopNode({ loopId, loop, blocks })
-      if (loopNodes) {
-        // Add both the loop node and its label node
-        nodeArray.push(...loopNodes)
-      }
-    })
-
-    // Add block nodes
+    // Add regular block nodes
     Object.entries(blocks).forEach(([blockId, block]) => {
       if (!block.type || !block.name) {
         logger.warn(`Skipping invalid block: ${blockId}`, { block })
@@ -354,19 +374,22 @@ function WorkflowContent() {
           type: 'loop',
           position: block.position,
           dragHandle: '.workflow-drag-handle',
+          style: {
+            width: 800,
+            height: 400,
+          },
           data: {
-            ...block.data,
             label: block.name,
-            loopType: block.data?.loopType || 'while',
+            loopType: block.data?.loopType || 'for',
             condition: block.data?.condition || '',
             count: block.data?.count || 1,
-            collection: block.data?.collection || ''
+            collection: block.data?.collection || '',
           },
-          extent: 'parent' // Ensure child nodes stay within parent bounds
         })
         return
       }
 
+      // Handle regular blocks
       const blockConfig = getBlock(block.type)
       if (!blockConfig) {
         logger.error(`No configuration found for block type: ${block.type}`, {
@@ -375,25 +398,13 @@ function WorkflowContent() {
         return
       }
 
-      const parentLoop = Object.entries(loops).find(([_, loop]) => loop.nodes.includes(block.id))
-      let position = block.position
-
-      if (parentLoop) {
-        const [loopId] = parentLoop
-        const loopNode = nodeArray.find((node) => node.id === `loop-${loopId}`)
-        if (loopNode) {
-          position = getRelativeLoopPosition(block.position, loopNode.position)
-        }
-      }
-
       const isActive = activeBlockIds.has(block.id)
       const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
 
       nodeArray.push({
         id: block.id,
         type: 'workflowBlock',
-        position,
-        parentId: parentLoop ? `loop-${parentLoop[0]}` : undefined,
+        position: block.position,
         dragHandle: '.workflow-drag-handle',
         data: {
           type: block.type,
@@ -406,7 +417,7 @@ function WorkflowContent() {
     })
 
     return nodeArray
-  }, [blocks, loops, activeBlockIds, pendingBlocks, isDebugModeEnabled])
+  }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled])
 
   // Update nodes
   const onNodesChange = useCallback(
@@ -515,6 +526,129 @@ function WorkflowContent() {
     }
   }, [setSubBlockValue])
 
+  const onNodeDrag = useCallback(
+    (evt: React.MouseEvent, dragNode: Node) => {
+      logger.info('Node drag event:', { nodeId: dragNode.id, nodeType: dragNode.type })
+      
+      const overlappingNode = getIntersectingNodes(dragNode)?.[0]
+      logger.info('Intersecting node:', overlappingNode ? { 
+        nodeId: overlappingNode.id, 
+        nodeType: overlappingNode.type 
+      } : 'none')
+      
+      overlappingNodeRef.current = overlappingNode
+
+      // Add visual feedback for valid/invalid drops
+      setNodes((prevNodes) =>
+        prevNodes.map((node) => {
+          if (node.id === dragNode.id) {
+            const newState = overlappingNode?.type === 'loop' ? 'valid' : undefined
+            logger.info('Setting node state:', { nodeId: node.id, state: newState })
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                state: newState,
+              },
+            }
+          }
+          return node
+        })
+      )
+    },
+    [getIntersectingNodes, setNodes]
+  )
+
+  const onNodeDragStop = useCallback(
+    (evt: React.MouseEvent, dragNode: Node) => {
+      logger.info('Node drag stop event:', { nodeId: dragNode.id, nodeType: dragNode.type })
+      
+      const overlappingNode = overlappingNodeRef.current
+      logger.info('Final overlapping node:', overlappingNode ? {
+        nodeId: overlappingNode.id,
+        nodeType: overlappingNode.type
+      } : 'none')
+
+      // If dragging into a loop node
+      if (overlappingNode?.type === 'loop') {
+        // Find the loop node's DOM element
+        const loopElement = document.querySelector(`[data-id="${overlappingNode.id}"]`)
+        logger.info('Found loop element:', { 
+          found: !!loopElement, 
+          loopId: overlappingNode.id 
+        })
+        
+        if (!loopElement) return
+
+        const loopBounds = loopElement.getBoundingClientRect()
+        logger.info('Loop bounds:', { 
+          left: loopBounds.left, 
+          top: loopBounds.top,
+          width: loopBounds.width,
+          height: loopBounds.height
+        })
+
+        // Calculate relative position within the loop
+        const relativePosition = {
+          x: evt.clientX - loopBounds.left,
+          y: evt.clientY - loopBounds.top,
+        }
+        logger.info('Calculated relative position:', relativePosition)
+
+        // Update node in React Flow
+        setNodes((prevNodes) =>
+          prevNodes.map((node) => {
+            if (node.id === dragNode.id) {
+              logger.info('Updating node in React Flow:', {
+                nodeId: node.id,
+                newParent: overlappingNode.id,
+                position: relativePosition
+              })
+              return {
+                ...node,
+                position: relativePosition,
+                parentNode: overlappingNode.id,
+                extent: 'parent',
+                data: {
+                  ...node.data,
+                  state: undefined,
+                },
+              }
+            }
+            return node
+          })
+        )
+
+        // Update position in workflow store
+        logger.info('Updating position in workflow store:', {
+          nodeId: dragNode.id,
+          position: relativePosition
+        })
+        updateBlockPosition(dragNode.id, relativePosition)
+      } else {
+        logger.info('Node not dropped on loop, resetting state')
+        // Reset any visual feedback state
+        setNodes((prevNodes) =>
+          prevNodes.map((node) => {
+            if (node.id === dragNode.id) {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  state: undefined,
+                },
+              }
+            }
+            return node
+          })
+        )
+      }
+
+      overlappingNodeRef.current = null
+    },
+    [setNodes, updateBlockPosition]
+  )
+
   if (!isInitialized) {
     return (
       <div className="flex h-[calc(100vh-4rem)] w-full items-center justify-center">
@@ -541,9 +675,15 @@ function WorkflowContent() {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           nodeTypes={nodeTypes}
+          nodeOrigin={[0.5, 0.5]}
+          nodesDraggable={true}
+          nodesConnectable={true}
+          nodesFocusable={true}
           edgeTypes={edgeTypes}
           onDrop={onDrop}
           onDragOver={(e) => e.preventDefault()}
+          onNodeDrag={onNodeDrag}
+          onNodeDragStop={onNodeDragStop}
           fitView
           minZoom={0.1}
           maxZoom={1.3}
@@ -564,8 +704,6 @@ function WorkflowContent() {
           onEdgeClick={onEdgeClick}
           elementsSelectable={true}
           selectNodesOnDrag={false}
-          nodesConnectable={true}
-          nodesDraggable={true}
           draggable={false}
           noWheelClassName="allow-scroll"
           edgesFocusable={true}

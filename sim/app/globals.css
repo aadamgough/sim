@@ -313,3 +313,14 @@ input[type='search']::-ms-clear {
 .font-geist-mono {
   font-family: var(--font-geist-mono);
 }
+
+/* Drag and drop styles for loop node */
+.drag-target {
+  transition: all 0.2s ease;
+}
+
+.drag-target.drag-over {
+  background-color: rgba(var(--primary) / 0.1);
+  border-color: hsl(var(--primary));
+  border-style: solid;
+}
