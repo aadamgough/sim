@@ -1,6 +1,6 @@
-import { memo, useCallback, useState } from 'react'
+import { memo, useCallback, useState, useEffect } from 'react'
 import { Handle, NodeProps, Position, NodeResizer, useReactFlow } from 'reactflow'
-import { RepeatIcon, X, ChevronDown } from 'lucide-react'
+import { RepeatIcon, X, ChevronDown, PlayCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -16,26 +16,82 @@ import 'prismjs/themes/prism.css'
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
-  const { deleteElements, getNode } = useReactFlow()
-  const removeBlock = useWorkflowStore((state) => state.removeBlock)
-  const updateLoopType = useWorkflowStore((state) => state.updateLoopType)
-  const updateLoopIterations = useWorkflowStore((state) => state.updateLoopIterations)
-  const updateLoopForEachItems = useWorkflowStore((state) => state.updateLoopForEachItems)
-  const updateNodeDimensions = useWorkflowStore((state) => state.updateNodeDimensions)
-
-  // Local state
+  const { deleteElements, getNode, getNodes, setNodes } = useReactFlow()
+  const {
+    loops,
+    removeBlock,
+    updateLoopType,
+    updateLoopIterations,
+    updateLoopForEachItems,
+    updateNodeDimensions
+  } = useWorkflowStore()
+  
+  // State for loop configuration
   const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
   const [inputPopoverOpen, setInputPopoverOpen] = useState(false)
-  const [inputValue, setInputValue] = useState(data.count?.toString() || '5')
+  const [inputValue, setInputValue] = useState(String(data.count || 5))
   const [editorValue, setEditorValue] = useState(data.collection || '')
 
-  const onDelete = useCallback(() => {
-    logger.info('Deleting loop node:', { id })
-    removeBlock(id)
-    deleteElements({ nodes: [{ id }] })
-  }, [deleteElements, id, removeBlock])
+  // Auto-resize effect when child nodes change
+  useEffect(() => {
+    const loopData = loops[id]
+    if (loopData && loopData.nodes && loopData.nodes.length > 0) {
+      const currentWidth = data.width || 800
+      const currentHeight = data.height || 500
+      
+      // Get all nodes in this loop
+      const childNodes = getNodes().filter(node => node.parentId === id)
+      if (childNodes.length === 0) return
+      
+      // Calculate the space needed for the child nodes
+      let rightmostPosition = 0
+      let bottommostPosition = 0
+      
+      childNodes.forEach(node => {
+        // Default node dimensions (approximated)
+        const nodeWidth = 320
+        const nodeHeight = 180
+        
+        const nodeRight = node.position.x + nodeWidth
+        const nodeBottom = node.position.y + nodeHeight
+        
+        rightmostPosition = Math.max(rightmostPosition, nodeRight)
+        bottommostPosition = Math.max(bottommostPosition, nodeBottom)
+      })
+      
+      // Add generous padding
+      const horizontalPadding = 350
+      const verticalPadding = 450
+      
+      const neededWidth = Math.max(800, rightmostPosition + horizontalPadding)
+      const neededHeight = Math.max(500, bottommostPosition + verticalPadding)
+      
+      // Only update if we need more space
+      if (neededWidth > currentWidth || neededHeight > currentHeight) {
+        logger.info('Auto-resizing loop node:', { id, width: neededWidth, height: neededHeight })
+        updateNodeDimensions(id, { 
+          width: neededWidth, 
+          height: neededHeight 
+        })
+      }
+    }
+  }, [loops, id, data.width, data.height, getNodes, updateNodeDimensions])
 
-  // Loop type management
+  const onDelete = () => {
+    // Delete this loop node
+    const node = getNode(id)
+    if (node) {
+      deleteElements({ nodes: [node] })
+      removeBlock(id)
+    }
+  }
+
+  const handleLoopTypeChange = (loopType: 'for' | 'forEach') => {
+    logger.info('Changing loop type:', { id, loopType })
+    updateLoopType(id, loopType)
+    setLabelPopoverOpen(false)
+  }
+
   const getLoopLabel = () => {
     switch (data.loopType) {
       case 'for':
@@ -43,33 +99,22 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       case 'forEach':
         return 'For each'
       default:
-        return 'Loop'
+        return 'For loop'
     }
   }
 
-  const handleLoopTypeChange = (type: 'for' | 'forEach') => {
-    updateLoopType(id, type)
-    setLabelPopoverOpen(false)
-  }
-
-  // Input management
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const sanitizedValue = e.target.value.replace(/[^0-9]/g, '')
-    const numValue = parseInt(sanitizedValue)
-
-    if (!isNaN(numValue)) {
-      setInputValue(Math.min(50, numValue).toString())
-    } else {
-      setInputValue(sanitizedValue)
-    }
+    setInputValue(e.target.value)
   }
 
   const handleInputSave = () => {
-    const value = parseInt(inputValue)
-    if (!isNaN(value)) {
-      const newValue = Math.min(50, Math.max(1, value))
-      updateLoopIterations(id, newValue)
-      setInputValue(newValue.toString())
+    // Validate input (must be a number between 1 and 50)
+    const numValue = parseInt(inputValue)
+    if (!isNaN(numValue) && numValue >= 1 && numValue <= 50) {
+      updateLoopIterations(id, numValue)
+    } else {
+      // Reset to current value if invalid
+      setInputValue(String(data.count || 5))
     }
     setInputPopoverOpen(false)
   }
@@ -92,7 +137,15 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
 
   const handleResize = useCallback((evt: any, { width, height }: { width: number; height: number }) => {
     logger.info('Loop node resized:', { id, width, height })
-    updateNodeDimensions(id, { width, height })
+    
+    // Always ensure minimum dimensions
+    const minWidth = 800
+    const minHeight = 500
+    
+    const finalWidth = Math.max(width, minWidth)
+    const finalHeight = Math.max(height, minHeight)
+    
+    updateNodeDimensions(id, { width: finalWidth, height: finalHeight })
   }, [id, updateNodeDimensions])
 
   logger.info('Rendering loop node:', { 
@@ -107,8 +160,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   return (
     <div className="group relative">
       <NodeResizer 
-        minWidth={300} 
-        minHeight={200}
+        minWidth={800} 
+        minHeight={600}
         isVisible={selected}
         lineClassName="border-primary"
         handleClassName="h-3 w-3 bg-primary border-primary"
@@ -117,7 +170,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       />
       <Card 
         className={cn(
-          'relative flex flex-col min-w-[300px] min-h-[200px] bg-background/50 p-4',
+          'relative flex flex-col min-w-[800px] min-h-[600px] bg-background/50 p-4',
           'border-2 border-dashed border-gray-400',
           'transition-all duration-200',
           selected && 'ring-2 ring-primary ring-offset-2',
@@ -125,12 +178,10 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         )}
         style={{
           width: data.width || 800,
-          height: data.height || 400,
+          height: data.height || 600,
           pointerEvents: 'all',
-          borderColor: data?.state === 'valid' ? 'rgb(34, 197, 94)' : undefined,
+          borderColor: data?.state === 'valid' ? '#40E0D0' : undefined,
           backgroundColor: data?.state === 'valid' ? 'rgba(34, 197, 94, 0.05)' : undefined,
-          position: 'relative',
-          overflow: 'visible',
         }}
       >
         <button
@@ -194,22 +245,17 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
               <Badge
                 variant="outline"
                 className={cn(
-                  'bg-background border-border text-foreground font-medium pr-1.5 pl-2.5 py-0.5 text-sm',
-                  'hover:bg-accent/50 transition-colors duration-150 cursor-pointer',
-                  'flex items-center gap-1'
+                  'bg-background border-border text-foreground font-medium px-2.5 py-0.5 text-sm',
+                  'hover:bg-accent/50 transition-colors duration-150 cursor-pointer'
                 )}
               >
                 {getInputLabel()}
-                <ChevronDown className="h-3 w-3 text-muted-foreground" />
               </Badge>
             </PopoverTrigger>
-            <PopoverContent 
-              className={cn('p-3', data.loopType !== 'for' ? 'w-72' : 'w-48')} 
-              align="start"
-            >
-              <div className="space-y-2">
-                <div className="text-xs font-medium text-muted-foreground">
-                  {data.loopType === 'for' ? 'Loop Iterations' : 'Collection Items'}
+            <PopoverContent className="w-52 p-3" align="start">
+              <div>
+                <div className="text-sm font-medium mb-2">
+                  {data.loopType === 'for' ? 'Number of iterations' : 'Collection to iterate over'}
                 </div>
 
                 {data.loopType === 'for' ? (
@@ -253,19 +299,47 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         <div className={cn(
           "flex-1 border border-dashed rounded-md p-2 transition-all duration-200 mt-4",
           data?.state === 'valid' ? 'border-green-500/30 bg-green-50/5' : 'border-gray-300',
-          "relative min-h-[100px]"
+          "relative min-h-[100px]",
+          "group-hover:border-primary/30",
+          "after:content-['Connect blocks to loop start'] after:absolute after:top-1 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:text-muted-foreground/50 after:pointer-events-none after:opacity-0 after:transition-opacity group-hover:after:opacity-100",
+          "loop-drop-container"
         )}>
+          {/* Simple Static Loop Start Block */}
+          <div className="absolute top-20 left-10 w-28 flex flex-col items-center">
+            <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative">
+              <div className="flex items-center justify-center gap-1.5">
+                <PlayCircle size={16} className="text-[#40E0D0]" />
+              </div>
+              <div className="text-[10px] text-muted-foreground mt-1 text-center">
+                {data?.loopType === 'for' ? `${data?.count || 5} iterations` : 'For each item'}
+              </div>
+              
+              {/* Fixed, stable handle position */}
+              <Handle
+                type="source"
+                position={Position.Right}
+                id="loop-start-source"
+                className="!bg-[#40E0D0] !w-3 !h-3 z-50"
+                style={{ 
+                  right: "-6px", 
+                  top: "50%",
+                  transform: "translateY(-50%)"
+                }}
+              />
+            </div>
+          </div>
+          
           {/* Child nodes are rendered here by React Flow */}
         </div>
 
         <Handle
           type="target"
-          position={Position.Top}
+          position={Position.Left}
           className="!bg-gray-400 !w-3 !h-3"
         />
         <Handle
-          type="source"
-          position={Position.Bottom}
+          type="target"
+          position={Position.Right}
           className="!bg-gray-400 !w-3 !h-3"
         />
       </Card>

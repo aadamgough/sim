@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { PanelLeftClose, PanelRight, PanelRightClose, Search } from 'lucide-react'
+import { PanelLeftClose, PanelRight, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -82,12 +82,11 @@ export function Toolbar() {
               {blocks.map((block) => (
                 <ToolbarBlock key={block.type} config={block} />
               ))}
+              
+              {/* Only render the LoopToolbarItem when activeTab is 'blocks' and no search query */}
+              {activeTab === 'blocks' && !searchQuery && <LoopToolbarItem />}
             </div>
 
-            {/* Loop Tool Section */}
-            <div className="mt-3 flex flex-col gap-3">
-              <LoopToolbarItem />
-            </div>
           </div>
         </ScrollArea>
 
