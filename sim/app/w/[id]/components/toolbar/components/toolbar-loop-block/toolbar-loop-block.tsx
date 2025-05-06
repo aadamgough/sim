@@ -1,4 +1,5 @@
 import { LoopTool } from "../../../loop-node/loop-config"
+import { useCallback } from 'react'
 
 // Custom component for the Loop Tool
 export default function LoopToolbarItem () {
@@ -6,11 +7,25 @@ export default function LoopToolbarItem () {
       e.dataTransfer.setData('application/json', JSON.stringify(LoopTool))
       e.dataTransfer.effectAllowed = 'move'
     }
+    
+    // Handle click to add loop block
+    const handleClick = useCallback((e: React.MouseEvent) => {
+      // Dispatch a custom event to be caught by the workflow component
+      const event = new CustomEvent('add-block-from-toolbar', {
+        detail: {
+          type: 'loop',
+          clientX: e.clientX,
+          clientY: e.clientY
+        },
+      })
+      window.dispatchEvent(event)
+    }, [])
   
     return (
       <div
         draggable
         onDragStart={handleDragStart}
+        onClick={handleClick}
         className="group flex items-center gap-3 rounded-lg border bg-card p-3.5 shadow-sm transition-colors hover:bg-accent/50 cursor-pointer active:cursor-grabbing"
       >
         <div

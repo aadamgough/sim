@@ -316,11 +316,48 @@ input[type='search']::-ms-clear {
 
 /* Drag and drop styles for loop node */
 .drag-target {
-  transition: all 0.2s ease;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
 .drag-target.drag-over {
-  background-color: rgba(var(--primary) / 0.1);
   border-color: hsl(var(--primary));
-  border-style: solid;
+  background-color: hsl(var(--primary) / 0.05);
+}
+
+/* Improve dragging performance */
+.smooth-drag-container {
+  contain: layout style paint;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+  will-change: transform;
+  transition: transform 0.01s linear;
+  -webkit-transform-style: preserve-3d;
+  -webkit-backface-visibility: hidden;
+}
+
+.smooth-drag-container * {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Optimize node rendering for smooth dragging performance */
+.react-flow__node-workflowBlock {
+  contain: layout style;
+  will-change: transform;
+  user-select: none;
+  touch-action: none;
+}
+
+/* React Flow position transitions within loops */
+.react-flow__node[data-parent-node-id] {
+  transition: transform 0.05s ease;
+  pointer-events: all !important;
+}
+
+/* Prevent jumpy drag behavior */
+.loop-drop-container .react-flow__node {
+  transform-origin: center !important;
+  position: absolute !important;
 }

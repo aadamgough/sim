@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useEffect } from 'react'
+import { memo, useCallback, useState, useEffect, useRef } from 'react'
 import { Handle, NodeProps, Position, NodeResizer, useReactFlow } from 'reactflow'
 import { RepeatIcon, X, ChevronDown, PlayCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,11 +31,20 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   const [inputPopoverOpen, setInputPopoverOpen] = useState(false)
   const [inputValue, setInputValue] = useState(String(data.count || 5))
   const [editorValue, setEditorValue] = useState(data.collection || '')
+  
+  // Ref to track child count changes
+  const prevChildCountRef = useRef<number>(0)
 
   // Auto-resize effect when child nodes change
   useEffect(() => {
     const loopData = loops[id]
-    if (loopData && loopData.nodes && loopData.nodes.length > 0) {
+    if (!loopData?.nodes) return
+
+    // Get current child node count
+    const currentChildCount = loopData.nodes.length
+    
+    // Only resize if the number of children has changed
+    if (currentChildCount !== prevChildCountRef.current) {
       const currentWidth = data.width || 800
       const currentHeight = data.height || 500
       
@@ -48,9 +57,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       let bottommostPosition = 0
       
       childNodes.forEach(node => {
-        // Default node dimensions (approximated)
-        const nodeWidth = 320
-        const nodeHeight = 180
+        const nodeWidth = 320  // Default node width
+        const nodeHeight = 180 // Default node height
         
         const nodeRight = node.position.x + nodeWidth
         const nodeBottom = node.position.y + nodeHeight
@@ -59,7 +67,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         bottommostPosition = Math.max(bottommostPosition, nodeBottom)
       })
       
-      // Add generous padding
+      // Add padding
       const horizontalPadding = 350
       const verticalPadding = 450
       
@@ -68,12 +76,21 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       
       // Only update if we need more space
       if (neededWidth > currentWidth || neededHeight > currentHeight) {
-        logger.info('Auto-resizing loop node:', { id, width: neededWidth, height: neededHeight })
+        logger.info('Auto-resizing loop node due to child count change:', { 
+          id, 
+          width: neededWidth, 
+          height: neededHeight,
+          prevCount: prevChildCountRef.current,
+          newCount: currentChildCount
+        })
         updateNodeDimensions(id, { 
           width: neededWidth, 
           height: neededHeight 
         })
       }
+      
+      // Update the ref
+      prevChildCountRef.current = currentChildCount
     }
   }, [loops, id, data.width, data.height, getNodes, updateNodeDimensions])
 
@@ -302,8 +319,18 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           "relative min-h-[100px]",
           "group-hover:border-primary/30",
           "after:content-['Connect blocks to loop start'] after:absolute after:top-1 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:text-muted-foreground/50 after:pointer-events-none after:opacity-0 after:transition-opacity group-hover:after:opacity-100",
-          "loop-drop-container"
-        )}>
+          "loop-drop-container",
+          "smooth-drag-container will-change-transform"
+        )}
+        style={{
+          transform: 'translate3d(0,0,0)',
+          backfaceVisibility: 'hidden',
+          WebkitBackfaceVisibility: 'hidden', 
+          perspective: 1000,
+          WebkitPerspective: 1000
+        }}
+        data-draggable="false"
+        >
           {/* Simple Static Loop Start Block */}
           <div className="absolute top-20 left-10 w-28 flex flex-col items-center">
             <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative">

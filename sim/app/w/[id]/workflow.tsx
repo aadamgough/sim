@@ -128,6 +128,170 @@ function WorkflowContent() {
     [blocks]
   )
 
+  // Transform blocks and loops into ReactFlow nodes
+  const nodes = useMemo(() => {
+    const nodeArray: any[] = []
+
+    // Add regular block nodes
+    Object.entries(blocks).forEach(([blockId, block]) => {
+      if (!block.type || !block.name) {
+        logger.warn(`Skipping invalid block: ${blockId}`, { block })
+        return
+      }
+
+      // Handle loop nodes differently
+      if (block.type === 'loop') {
+        logger.info('Creating loop node in ReactFlow:', { 
+          id: block.id, 
+          width: block.data?.width || 800,
+          height: block.data?.height || 400,
+          loopType: block.data?.loopType || 'for'
+        });
+        
+        nodeArray.push({
+          id: block.id,
+          type: 'loop',
+          position: block.position,
+          dragHandle: '.workflow-drag-handle',
+          style: {
+            width: block.data?.width || 800,
+            height: block.data?.height || 400,
+          },
+          data: {
+            ...block.data,
+            label: block.name,
+            loopType: block.data?.loopType || 'for',
+            condition: block.data?.condition || '',
+            count: block.data?.count || 1,
+            collection: block.data?.collection || '',
+            width: block.data?.width || 800,
+            height: block.data?.height || 400,
+          },
+        })
+        return
+      }
+
+      // Handle regular blocks
+      const blockConfig = getBlock(block.type)
+      if (!blockConfig) {
+        logger.error(`No configuration found for block type: ${block.type}`, {
+          block,
+        })
+        return
+      }
+
+      const isActive = activeBlockIds.has(block.id)
+      const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
+      
+      // Check if this block belongs to a loop node
+      const parentId = block.data?.parentId;
+      if (parentId) {
+        logger.info('Found block with parentId in data:', {
+          blockId: block.id,
+          parentId,
+          blockType: block.type
+        });
+      }
+
+      nodeArray.push({
+        id: block.id,
+        type: 'workflowBlock',
+        position: block.position,
+        parentId: parentId, // Set the parentId from block data
+        extent: parentId ? 'parent' as const : undefined,
+        dragHandle: '.workflow-drag-handle',
+        data: {
+          type: block.type,
+          config: blockConfig,
+          name: block.name,
+          isActive,
+          isPending,
+        },
+      })
+    })
+    
+    // Add diagnostic logging for loop-node relationships
+    const loopNodes = nodeArray.filter(n => n.type === 'loop');
+    loopNodes.forEach(loopNode => {
+      const loopId = loopNode.id;
+      const childNodesInStore = loops[loopId]?.nodes || [];
+      logger.info('Loop-node relationship check:', {
+        loopId,
+        childrenCount: childNodesInStore.length,
+        childrenIds: childNodesInStore
+      });
+    });
+
+    logger.info('Node array created:', { 
+      totalNodes: nodeArray.length,
+      loopNodes: nodeArray.filter(n => n.type === 'loop').length,
+      nodesWithParents: nodeArray.filter(n => n.parentId).length
+    });
+
+    return nodeArray
+  }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled, loops])
+  
+  // Helper function to resize loop nodes based on child block positions
+  const resizeLoopForChildBlock = useCallback((
+    loopId: string, 
+    blockPosition: { x: number, y: number },
+    blockWidth = 320,
+    blockHeight = 180
+  ) => {
+    // Find the loop node
+    const loopNode = nodes.find(node => node.id === loopId)
+    if (!loopNode) return
+    
+    // Get current dimensions
+    const loopData = loopNode.data || {}
+    const currentWidth = loopData.width || 800
+    const currentHeight = loopData.height || 600
+    
+    // Calculate the right and bottom edges of the block
+    const rightEdge = blockPosition.x + blockWidth
+    const bottomEdge = blockPosition.y + blockHeight
+    
+    // Add padding for extra space
+    const horizontalPadding = 300
+    const verticalPadding = 400
+    
+    // Check if we need to expand the loop node
+    if (rightEdge + horizontalPadding > currentWidth || 
+        bottomEdge + verticalPadding > currentHeight) {
+      
+      // Calculate new dimensions
+      const newWidth = Math.max(currentWidth, rightEdge + horizontalPadding)
+      const newHeight = Math.max(currentHeight, bottomEdge + verticalPadding)
+      
+      // Update dimensions in the store
+      updateNodeDimensions(loopId, { width: newWidth, height: newHeight })
+      
+      // Update the node in React Flow
+      setNodes(prevNodes => prevNodes.map(node => {
+        if (node.id === loopId) {
+          return {
+            ...node,
+            style: {
+              ...node.style,
+              width: newWidth,
+              height: newHeight
+            },
+            data: {
+              ...node.data,
+              width: newWidth,
+              height: newHeight
+            }
+          }
+        }
+        return node
+      }))
+      
+      return { width: newWidth, height: newHeight }
+    }
+    
+    return { width: currentWidth, height: currentHeight }
+  }, [nodes, updateNodeDimensions, setNodes])
+
   // Determine the appropriate source handle based on block type
   const determineSourceHandle = useCallback((block: { id: string; type: string }) => {
     // Default source handle
@@ -154,29 +318,156 @@ function WorkflowContent() {
   // Listen for toolbar block click events
   useEffect(() => {
     const handleAddBlockFromToolbar = (event: CustomEvent) => {
-      const { type } = event.detail
+      const { type, clientX, clientY } = event.detail
 
       if (!type) return
       if (type === 'connectionBlock') return
+
+      // Check if the click/drop is over a loop node first
+      if (clientX && clientY && type !== 'loop' && type !== 'starter') {
+        // Convert client coordinates to workflow coordinates
+        const workflowBounds = document.querySelector('.react-flow__renderer')?.getBoundingClientRect()
+        if (workflowBounds) {
+          const positionInWorkflow = {
+            x: clientX - workflowBounds.left,
+            y: clientY - workflowBounds.top
+          }
+          
+          // Check if position intersects with any loop node
+          const loopNode = getIntersectingNodes({ 
+            x: positionInWorkflow.x, 
+            y: positionInWorkflow.y, 
+            width: 1, 
+            height: 1 
+          }).find(node => node.type === 'loop')
+          
+          if (loopNode) {
+            logger.info('Adding block directly to loop node from toolbar:', { 
+              loopId: loopNode.id, 
+              blockType: type
+            })
+            
+            // Get the loop node's DOM element
+            const loopElement = document.querySelector(`[data-id="${loopNode.id}"]`)
+            if (!loopElement) return
+            
+            // Get dimensions for the loop node
+            const loopNodeData = loopNode.data || {}
+            const loopNodeWidth = loopNodeData.width || 800
+            const loopNodeHeight = loopNodeData.height || 400
+            
+            // Calculate relative position within the loop node
+            const loopRect = loopElement.getBoundingClientRect()
+            const relativePosition = {
+              x: Math.max(50, Math.min(loopNodeWidth - 350, 
+                clientX - loopRect.left - 4)),
+              y: Math.max(50, Math.min(loopNodeHeight - 200, 
+                clientY - loopRect.top - 109))
+            }
+            
+            // Create block
+            const blockConfig = getBlock(type)
+            if (!blockConfig) {
+              logger.error('Invalid block type:', { type })
+              return
+            }
+            
+            const id = crypto.randomUUID()
+            const name = `${blockConfig.name} ${
+              Object.values(blocks).filter((b) => b.type === type).length + 1
+            }`
+            
+            // Add to workflow store with parent node info
+            addBlock(id, type, name, relativePosition, {
+              parentId: loopNode.id
+            })
+            
+            // Add to React Flow with proper parent node configuration
+            setNodes((nds) => nds.concat({
+              id,
+              type: 'workflowBlock',
+              position: relativePosition,
+              parentId: loopNode.id,
+              extent: 'parent' as const,
+              dragHandle: '.workflow-drag-handle',
+              data: {
+                type,
+                config: blockConfig,
+                name
+              }
+            }))
+            
+            // Update loop's nodes array in the workflow store
+            const workflowStore = useWorkflowStore.getState()
+            const currentLoops = { ...workflowStore.loops }
+            
+            if (!currentLoops[loopNode.id]) {
+              currentLoops[loopNode.id] = {
+                id: loopNode.id,
+                nodes: [id],
+                iterations: 5,
+                loopType: 'for',
+                forEachItems: ''
+              }
+            } else {
+              currentLoops[loopNode.id] = {
+                ...currentLoops[loopNode.id],
+                nodes: [...currentLoops[loopNode.id].nodes, id]
+              }
+            }
+            
+            useWorkflowStore.setState({ loops: currentLoops })
+            
+            // Check if we need to resize the loop node
+            const blockWidth = 320  // Approximate width
+            const blockHeight = 180 // Approximate height
+            
+            const rightEdge = relativePosition.x + blockWidth
+            const bottomEdge = relativePosition.y + blockHeight
+            
+            const horizontalPadding = 300
+            const verticalPadding = 400
+            
+            if (rightEdge + horizontalPadding > loopNodeWidth || 
+                bottomEdge + verticalPadding > loopNodeHeight) {
+              
+              const newWidth = Math.max(loopNodeWidth, rightEdge + horizontalPadding)
+              const newHeight = Math.max(loopNodeHeight, bottomEdge + verticalPadding)
+              
+              // Update loop dimensions
+              updateNodeDimensions(loopNode.id, { width: newWidth, height: newHeight })
+              
+              // Update nodes in React Flow
+              setNodes(prevNodes => prevNodes.map(node => {
+                if (node.id === loopNode.id) {
+                  return {
+                    ...node,
+                    style: {
+                      ...node.style,
+                      width: newWidth,
+                      height: newHeight
+                    },
+                    data: {
+                      ...node.data,
+                      width: newWidth,
+                      height: newHeight
+                    }
+                  }
+                }
+                return node
+              }))
+            }
+            
+            return
+          }
+        }
+      }
 
       // Calculate the center position of the viewport
       const centerPosition = project({
         x: window.innerWidth / 2,
         y: window.innerHeight / 2,
       })
-
-      // Handle loop nodes differently
-      if (type === 'loop') {
-        const id = crypto.randomUUID()
-        addBlock(id, type, 'Loop', centerPosition, {
-          loopType: 'while',
-          condition: '',
-          count: 1,
-          collection: '',
-          extent: 'parent' // Ensure child nodes stay within parent bounds
-        })
-        return
-      }
 
       const blockConfig = getBlock(type)
       if (!blockConfig) {
@@ -221,7 +512,7 @@ function WorkflowContent() {
         handleAddBlockFromToolbar as EventListener
       )
     }
-  }, [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle])
+  }, [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle, resizeLoopForChildBlock])
 
   // Update the onDrop handler
   const onDrop = useCallback(
@@ -247,45 +538,22 @@ function WorkflowContent() {
         if (droppedOnLoop) {
           logger.info('Dropping onto loop node:', droppedOnLoop.id)
           
+          // Prevent starter blocks from being added to loop nodes
+          if (data.type === 'starter') {
+            logger.info('Prevented starter block from being added to loop node')
+            return
+          }
+          
           // Get the loop node's DOM element
           const loopElement = document.querySelector(`[data-id="${droppedOnLoop.id}"]`)
           if (!loopElement) return
           
-          // Get the drop container within the loop node
-          const dropContainer = loopElement.querySelector('.loop-drop-container')
-          if (!dropContainer) {
-            logger.error('Could not find drop container in loop node')
-            return
-          }
-          
-          // Get dimensions for the loop node
-          const loopNodeData = droppedOnLoop.data || {};
-          const loopNodeWidth = loopNodeData.width || 800;
-          const loopNodeHeight = loopNodeData.height || 400;
-          
-          // Calculate relative position within the loop's drop container
-          const containerBounds = dropContainer.getBoundingClientRect()
-          
-          // OPTION 8: Based on drop position relative to loop node
-          const loopRect = loopElement.getBoundingClientRect();
+          // Calculate relative position within the loop node
+          const loopRect = loopElement.getBoundingClientRect()
           const relativePosition = {
-            // Calculate position relative to the loop node's top-left corner with gentler constraints
-            x: Math.max(20, Math.min(containerBounds.width - 350, 
-              event.clientX - loopRect.left - 4)), // 4px is for the padding
-            y: Math.max(20, Math.min(containerBounds.height - 200, 
-              event.clientY - loopRect.top - 36)) // Reduced from 109px to 36px for better accuracy
+            x: Math.max(50, Math.min(loopRect.width - 350, event.clientX - loopRect.left - 4)),
+            y: Math.max(50, Math.min(loopRect.height - 200, event.clientY - loopRect.top - 109))
           }
-          
-          // Get dimensions of the element being dropped
-          let blockWidth = 320;  // Default width for most blocks
-          let blockHeight = 180; // Default height with some buffer
-          
-          logger.info('Drop container bounds:', {
-            left: containerBounds.left,
-            top: containerBounds.top,
-            width: containerBounds.width,
-            height: containerBounds.height
-          })
           
           logger.info('Calculated relative position:', relativePosition)
 
@@ -301,74 +569,29 @@ function WorkflowContent() {
             Object.values(blocks).filter((b) => b.type === data.type).length + 1
           }`
 
-          // Add to workflow store with relative position
+          // Add to workflow store with relative position and parent info
           addBlock(id, data.type, name, relativePosition, {
-            parentId: droppedOnLoop.id,  // Store the parentId in block data
+            parentId: droppedOnLoop.id,
           })
 
-          // IMPROVED: Calculate new dimensions considering all nodes in the loop
-          // Get existing child nodes in this loop
-          const existingChildren = nodes.filter(n => n.parentId === droppedOnLoop.id);
+          // Default block dimensions for calculating space
+          const blockWidth = 320
+          const blockHeight = 180
           
-          // Calculate the rightmost and bottommost positions to determine the needed size
-          let rightmostPosition = relativePosition.x + blockWidth;
-          let bottommostPosition = relativePosition.y + blockHeight;
+          // Calculate dimensions using the helper function
+          resizeLoopForChildBlock(
+            droppedOnLoop.id,
+            relativePosition,
+            blockWidth,
+            blockHeight
+          )
           
-          // Check if existing children require more space
-          existingChildren.forEach(child => {
-            // Calculate the right and bottom edges of existing children
-            const childRight = child.position.x + blockWidth;
-            const childBottom = child.position.y + blockHeight;
-            
-            // Update the rightmost and bottommost positions if needed
-            rightmostPosition = Math.max(rightmostPosition, childRight);
-            bottommostPosition = Math.max(bottommostPosition, childBottom);
-          });
-          
-          // Now add more generous margins to ensure sufficient space
-          const horizontalPadding = 300; // Add 300px beyond the rightmost element
-          const verticalPadding = 400;   // Add 400px beyond the bottommost element
-          
-          const newWidth = Math.max(loopNodeWidth, rightmostPosition + horizontalPadding);
-          const newHeight = Math.max(loopNodeHeight, bottommostPosition + verticalPadding);
-          
-          logger.info('New loop dimensions:', { width: newWidth, height: newHeight });
-
-          // Add to React Flow with proper parent node configuration
+          // Add the child block to ReactFlow
           setNodes((nds) => {
-            // First update any existing nodes
-            const updatedNodes = nds.map(node => {
-              if (node.id === droppedOnLoop.id) {
-                // Update the loop node dimensions
-                logger.info('Updating loop node dimensions:', { 
-                  id: droppedOnLoop.id, 
-                  width: newWidth, 
-                  height: newHeight 
-                });
-                return {
-                  ...node,
-                  style: {
-                    ...node.style,
-                    width: newWidth,
-                    height: newHeight,
-                  },
-                  data: {
-                    ...node.data,
-                    width: newWidth,
-                    height: newHeight,
-                  },
-                };
-              }
-              return node;
-            });
+            // First update the loop node's dimensions
+            const updatedNodes = nds.map(node => node)
             
-            // Then add the new node
-            logger.info('Adding node as child of loop:', {
-              childId: id,
-              parentId: droppedOnLoop.id,
-              position: relativePosition
-            });
-            
+            // Then add the new block as a child of the loop
             return updatedNodes.concat({
               id,
               type: 'workflowBlock',
@@ -376,20 +599,16 @@ function WorkflowContent() {
               parentId: droppedOnLoop.id,
               extent: 'parent' as const,
               expandParent: true,
-              zIndex: 1000, // Ensure it appears above other elements
               dragHandle: '.workflow-drag-handle',
               data: {
                 type: data.type,
                 config: blockConfig,
-                name: name,
+                name,
               }
-            });
-          });
+            })
+          })
           
-          // Update loop dimensions in workflow store
-          updateNodeDimensions(droppedOnLoop.id, { width: newWidth, height: newHeight });
-
-          // Update the loop's nodes array
+          // Update the loop's nodes array in the workflow store
           const workflowStore = useWorkflowStore.getState()
           const currentLoops = { ...workflowStore.loops }
           
@@ -407,7 +626,7 @@ function WorkflowContent() {
               nodes: [...currentLoops[droppedOnLoop.id].nodes, id]
             }
           }
-
+          
           useWorkflowStore.setState({ loops: currentLoops })
           return
         }
@@ -523,7 +742,7 @@ function WorkflowContent() {
         logger.error('Error in onDrop:', error)
       }
     },
-    [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle])
+    [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle, resizeLoopForChildBlock])
 
   // Init workflow
   useEffect(() => {
@@ -581,109 +800,6 @@ function WorkflowContent() {
     resetVariablesLoaded,
   ])
 
-  // Transform blocks and loops into ReactFlow nodes
-  const nodes = useMemo(() => {
-    const nodeArray: any[] = []
-
-    // Add regular block nodes
-    Object.entries(blocks).forEach(([blockId, block]) => {
-      if (!block.type || !block.name) {
-        logger.warn(`Skipping invalid block: ${blockId}`, { block })
-        return
-      }
-
-      // Handle loop nodes differently
-      if (block.type === 'loop') {
-        logger.info('Creating loop node in ReactFlow:', { 
-          id: block.id, 
-          width: block.data?.width || 800,
-          height: block.data?.height || 400,
-          loopType: block.data?.loopType || 'for'
-        });
-        
-        nodeArray.push({
-          id: block.id,
-          type: 'loop',
-          position: block.position,
-          dragHandle: '.workflow-drag-handle',
-          style: {
-            width: block.data?.width || 800,
-            height: block.data?.height || 400,
-          },
-          data: {
-            ...block.data,
-            label: block.name,
-            loopType: block.data?.loopType || 'for',
-            condition: block.data?.condition || '',
-            count: block.data?.count || 1,
-            collection: block.data?.collection || '',
-            width: block.data?.width || 800,
-            height: block.data?.height || 400,
-          },
-        })
-        return
-      }
-
-      // Handle regular blocks
-      const blockConfig = getBlock(block.type)
-      if (!blockConfig) {
-        logger.error(`No configuration found for block type: ${block.type}`, {
-          block,
-        })
-        return
-      }
-
-      const isActive = activeBlockIds.has(block.id)
-      const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
-      
-      // Check if this block belongs to a loop node
-      const parentId = block.data?.parentId;
-      if (parentId) {
-        logger.info('Found block with parentId in data:', {
-          blockId: block.id,
-          parentId,
-          blockType: block.type
-        });
-      }
-
-      nodeArray.push({
-        id: block.id,
-        type: 'workflowBlock',
-        position: block.position,
-        parentId: parentId, // Set the parentId from block data
-        extent: parentId ? 'parent' as const : undefined,
-        dragHandle: '.workflow-drag-handle',
-        data: {
-          type: block.type,
-          config: blockConfig,
-          name: block.name,
-          isActive,
-          isPending,
-        },
-      })
-    })
-    
-    // Add diagnostic logging for loop-node relationships
-    const loopNodes = nodeArray.filter(n => n.type === 'loop');
-    loopNodes.forEach(loopNode => {
-      const loopId = loopNode.id;
-      const childNodesInStore = loops[loopId]?.nodes || [];
-      logger.info('Loop-node relationship check:', {
-        loopId,
-        childrenCount: childNodesInStore.length,
-        childrenIds: childNodesInStore
-      });
-    });
-
-    logger.info('Node array created:', { 
-      totalNodes: nodeArray.length,
-      loopNodes: nodeArray.filter(n => n.type === 'loop').length,
-      nodesWithParents: nodeArray.filter(n => n.parentId).length
-    });
-
-    return nodeArray
-  }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled, loops])
-
   // Update nodes
   const onNodesChange = useCallback(
     (changes: any) => {
@@ -692,71 +808,24 @@ function WorkflowContent() {
           const node = nodes.find((n) => n.id === change.id)
           if (!node) return
 
-          if (node.parentId) {
-            const loopNode = nodes.find((n) => n.id === node.parentId)
-            if (loopNode) {
-              // For nodes inside a loop, we need to:
-              // 1. Let React Flow handle the visual rendering and movement
-              // 2. Only enforce boundary constraints to prevent blocks from going out of bounds
-              // 3. Update our data store with the correct relative position
-
-              // Get loop dimensions
-              const loopWidth = loopNode.style?.width || 800;
-              const loopHeight = loopNode.style?.height || 400;
-              
-              // Get node dimensions (approximate)
-              const nodeWidth = 320; // Default width
-              const nodeHeight = 150; // Default height
-              
-              // SIMPLIFY: Allow more freedom of movement inside the loop node
-              // Only constrain if extremely out of bounds to prevent the node
-              // from disappearing completely outside the loop
-              const minX = -nodeWidth / 2;
-              const minY = -nodeHeight / 2;
-              const maxX = loopWidth - nodeWidth / 2;
-              const maxY = loopHeight - nodeHeight / 2;
-              
-              // Only apply constraints if seriously out of bounds
-              let newX = change.position.x;
-              let newY = change.position.y;
-              
-              // Only apply constraints in extreme cases
-              if (newX < minX - 100) newX = minX;
-              else if (newX > maxX + 100) newX = maxX;
-              
-              if (newY < minY - 100) newY = minY;
-              else if (newY > maxY + 100) newY = maxY;
-              
-              // If we adjusted the position, update it
-              if (newX !== change.position.x || newY !== change.position.y) {
-                change.position.x = newX;
-                change.position.y = newY;
-              }
-
-              // Update the node in our workflow store with its position
-              updateBlockPosition(node.id, { x: change.position.x, y: change.position.y })
-            }
-          } else {
-            // For top-level nodes, simply update the position
-            updateBlockPosition(node.id, { x: change.position.x, y: change.position.y })
-          }
+          // For nodes inside a loop, just update the position directly
+          // Let React Flow handle the parent-child relationship
+          updateBlockPosition(node.id, { 
+            x: change.position.x, 
+            y: change.position.y 
+          })
+          
+          // Remove the resize check during movement to prevent continuous growth
+          // Resizing is now handled only when nodes are added/removed in the loop node component
         } else if (change.type === 'remove') {
           // Handle node removal
-
-          // Check if it was a loop node
           const node = nodes.find((n) => n.id === change.id)
           if (node?.type === 'loop') {
             const workflowStore = useWorkflowStore.getState()
             const currentLoops = { ...workflowStore.loops }
-            
-            // Remove the loop
             delete currentLoops[node.id]
-            
-            // Update the store
             useWorkflowStore.setState({ loops: currentLoops })
           }
-
-          // Remove from blocks
           removeBlock(change.id)
         }
       })
@@ -832,6 +901,70 @@ function WorkflowContent() {
       const { blockId, subBlockId, value } = event.detail
       if (blockId && subBlockId) {
         setSubBlockValue(blockId, subBlockId, value)
+        
+        // Check if this block is inside a loop node
+        const block = blocks[blockId]
+        if (block?.data?.parentId) {
+          // Schedule a check for loop node resize after the DOM has updated
+          setTimeout(() => {
+            const blockElement = document.querySelector(`[data-id="${blockId}"]`)
+            const loopElement = document.querySelector(`[data-id="${block.data?.parentId}"]`)
+            
+            if (blockElement && loopElement && block.data) {
+              // Get the loop node data
+              const loopId = block.data.parentId
+              const loopNode = nodes.find(n => n.id === loopId)
+              if (!loopNode) return
+              
+              const loopNodeData = loopNode.data || {}
+              const currentWidth = loopNodeData.width || 800
+              const currentHeight = loopNodeData.height || 400
+              
+              // Get block's bounding client rect
+              const blockRect = blockElement.getBoundingClientRect()
+              const loopRect = loopElement.getBoundingClientRect()
+              
+              // Calculate the block's bottom edge relative to the loop node
+              const blockBottom = block.position.y + blockRect.height
+              
+              // Add padding (same as in onNodeDragStop)
+              const verticalPadding = 400
+              
+              // Check if we need to increase the height
+              if (blockBottom + verticalPadding > currentHeight) {
+                const newHeight = blockBottom + verticalPadding
+                logger.info('Resizing loop node based on block content:', {
+                  loopId,
+                  blockId,
+                  newHeight,
+                  blockBottom,
+                  currentHeight
+                })
+                
+                // Update both React Flow nodes and workflow store
+                updateNodeDimensions(loopId, { width: currentWidth, height: newHeight })
+                
+                // Update nodes in React Flow
+                setNodes(prevNodes => prevNodes.map(node => {
+                  if (node.id === loopId) {
+                    return {
+                      ...node,
+                      style: {
+                        ...node.style,
+                        height: newHeight
+                      },
+                      data: {
+                        ...node.data,
+                        height: newHeight
+                      }
+                    }
+                  }
+                  return node
+                }))
+              }
+            }
+          }, 200) // Small delay to ensure DOM has updated
+        }
       }
     }
 
@@ -843,7 +976,7 @@ function WorkflowContent() {
         handleSubBlockValueUpdate as EventListener
       )
     }
-  }, [setSubBlockValue])
+  }, [setSubBlockValue, blocks, nodes, updateNodeDimensions, setNodes])
 
   const onNodeDrag = useCallback(
     (evt: React.MouseEvent, dragNode: Node) => {
@@ -854,6 +987,12 @@ function WorkflowContent() {
         parentId: dragNode.parentId 
       })
 
+      // If this node is already a child of a loop node, don't interfere
+      if (dragNode.parentId) {
+        logger.info('Node is being dragged within parent - skipping custom handling')
+        return
+      }
+      
       // Get the node that's currently being overlapped, if any
       const intersections = getIntersectingNodes(dragNode).filter(
         (n) => n.type === 'loop' && n.id !== dragNode.parentId
@@ -862,16 +1001,7 @@ function WorkflowContent() {
       const overlappingNode = intersections[0]
       overlappingNodeRef.current = overlappingNode
 
-      // If the node being dragged is inside a loop node (has a parentId),
-      // we want to optimize the dragging experience to make it smooth and natural
-      if (dragNode.parentId) {
-        // Use ReactFlow's built-in drag handling and don't interfere with its calculations
-        // This allows for smooth movement of nodes within their parent
-        logger.info('Node is being dragged within parent:', dragNode.parentId)
-        return
-      }
-
-      // The rest of the function handles dragging nodes that are not inside a loop
+      // Visual feedback for dragging over loop nodes
       setNodes((prevNodes) =>
         prevNodes.map((node) => {
           if (node.id === dragNode.id) {
@@ -884,7 +1014,6 @@ function WorkflowContent() {
             }
           }
 
-          // If the current node is being dragged over, highlight it
           if (overlappingNode && node.id === overlappingNode.id) {
             return {
               ...node,
@@ -900,7 +1029,6 @@ function WorkflowContent() {
             }
           }
           
-          // Reset state on other loop nodes
           if (node.type === 'loop' && (!overlappingNode || node.id !== overlappingNode.id)) {
             return {
               ...node,
@@ -925,7 +1053,7 @@ function WorkflowContent() {
   const onNodeDragStop = useCallback(
     (evt: React.MouseEvent, dragNode: Node) => {
       logger.info('Node drag stop event:', { nodeId: dragNode.id, nodeType: dragNode.type })
-      
+
       const overlappingNode = overlappingNodeRef.current
       logger.info('Final overlapping node:', overlappingNode ? {
         nodeId: overlappingNode.id,
@@ -934,6 +1062,17 @@ function WorkflowContent() {
 
       // If dragging into a loop node
       if (overlappingNode?.type === 'loop') {
+        // Check if the dragged node is a starter node
+        const draggedNodeData = dragNode.data || {}
+        const isStarterBlock = draggedNodeData.type === 'starter'
+        
+        // Prevent starter blocks from being added to loop nodes
+        if (isStarterBlock) {
+          logger.info('Prevented starter block from being added to loop node')
+          overlappingNodeRef.current = null
+          return
+        }
+        
         // Find the loop node's DOM element
         const loopElement = document.querySelector(`[data-id="${overlappingNode.id}"]`)
         logger.info('Found loop element:', { 
@@ -943,28 +1082,14 @@ function WorkflowContent() {
         
         if (!loopElement) return
 
-        // Get the loop node's drop container
-        const dropContainer = loopElement.querySelector('.loop-drop-container')
-        if (!dropContainer) {
-          logger.error('Could not find drop container in loop node')
-          return
-        }
-        
         // Get the dragged node's dimensions
         const draggedNodeElement = document.querySelector(`[data-id="${dragNode.id}"]`)
         if (!draggedNodeElement) return
         
-        // Get bounds
-        const containerBounds = dropContainer.getBoundingClientRect()
+        // Get bounds and dimensions
         const draggedNodeBounds = draggedNodeElement.getBoundingClientRect()
         
-        // Get dimensions for the loop node
-        const loopNodeData = overlappingNode.data || {};
-        const loopNodeWidth = loopNodeData.width || 800;
-        const loopNodeHeight = loopNodeData.height || 400;
-        
-        // Calculate position - simplify the relative positioning calculation
-        // This is where we simplify to reduce erratic movement
+        // Calculate position
         const loopRect = loopElement.getBoundingClientRect();
         const relativePosition = {
           x: evt.clientX - loopRect.left - 4, // 4px is for the loop's padding
@@ -973,46 +1098,19 @@ function WorkflowContent() {
         
         logger.info('Calculated relative position:', relativePosition)
         
-        // IMPROVED: Calculate required dimensions based on the node's position and existing child nodes
-        // Get existing child nodes in this loop (excluding the current dragged node if it was already in this loop)
-        const existingChildren = nodes.filter(n => 
-          n.parentId === overlappingNode.id && n.id !== dragNode.id
-        );
-        
-        // Default block dimensions
+        // Calculate required dimensions based on the node's position
         const blockWidth = draggedNodeBounds.width || 320;
         const blockHeight = draggedNodeBounds.height || 180;
         
-        // Calculate the rightmost and bottommost positions including the dragged node
-        let rightmostPosition = relativePosition.x + blockWidth;
-        let bottommostPosition = relativePosition.y + blockHeight;
-        
-        // Check if existing children require more space
-        existingChildren.forEach(child => {
-          // Calculate the right and bottom edges of existing children
-          const childRight = child.position.x + blockWidth;
-          const childBottom = child.position.y + blockHeight;
-          
-          // Update the rightmost and bottommost positions if needed
-          rightmostPosition = Math.max(rightmostPosition, childRight);
-          bottommostPosition = Math.max(bottommostPosition, childBottom);
-        });
-        
-        // Now add more generous margins to ensure sufficient space
-        const horizontalPadding = 300; // Add 300px beyond the rightmost element
-        const verticalPadding = 400;   // Add 400px beyond the bottommost element
-        
-        const requiredWidth = Math.max(loopNodeWidth, rightmostPosition + horizontalPadding);
-        const requiredHeight = Math.max(loopNodeHeight, bottommostPosition + verticalPadding);
-        
-        logger.info('New loop dimensions after drag:', {
-          width: requiredWidth,
-          height: requiredHeight,
-          rightmostPos: rightmostPosition,
-          bottommostPos: bottommostPosition
-        });
+        // Use the helper function to properly resize the loop node
+        resizeLoopForChildBlock(
+          overlappingNode.id,
+          relativePosition,
+          blockWidth,
+          blockHeight
+        )
 
-        // Find and remove any connections to the dragged node before it goes into the loop
+        // Remove any connections to this node before adding to loop
         const connectionsToRemove = edges.filter(
           edge => edge.source === dragNode.id || edge.target === dragNode.id
         )
@@ -1021,36 +1119,19 @@ function WorkflowContent() {
           connectionsToRemove.forEach(edge => {
             removeEdge(edge.id)
           })
-          logger.info('Removed connections to node being moved into loop:', 
-            connectionsToRemove.map(edge => edge.id))
         }
 
-        // Update nodes in React Flow
+        // Update the nodes in React Flow
         setNodes((prevNodes) => {
-          logger.info('Updating nodes for loop containment - BEFORE:', {
-            dragNodeId: dragNode.id,
-            dragNodeParent: dragNode.parentId,
-            overlappingNodeId: overlappingNode.id
-          });
-          
-          const updatedNodes = prevNodes.map((node) => {
+          // Update both the loop node and the dragged node
+          return prevNodes.map((node) => {
             if (node.id === dragNode.id) {
-              logger.info('Setting parentId of dragged node:', {
-                nodeId: node.id,
-                newParent: overlappingNode.id,
-                position: relativePosition
-              });
+              // Update the dragged node with parent info
               return {
                 ...node,
-                // Create a new position object to ensure React Flow detects the change
-                position: {
-                  x: relativePosition.x,
-                  y: relativePosition.y
-                },
+                position: relativePosition,
                 parentId: overlappingNode.id,
                 extent: 'parent' as const,
-                expandParent: true,
-                zIndex: 1000,
                 data: {
                   ...node.data,
                   state: undefined,
@@ -1058,65 +1139,34 @@ function WorkflowContent() {
               };
             }
             if (node.id === overlappingNode.id) {
-              logger.info('Updating loop dimensions in React Flow:', {
-                nodeId: node.id,
-                width: requiredWidth,
-                height: requiredHeight
-              });
+              // Reset visual feedback on the loop node
               return {
                 ...node,
                 style: {
                   ...node.style,
-                  width: requiredWidth,
-                  height: requiredHeight,
                   borderColor: undefined,
                   backgroundColor: undefined,
                 },
                 data: {
                   ...node.data,
-                  width: requiredWidth,
-                  height: requiredHeight,
                   state: undefined,
                 },
               };
             }
             return node;
           });
-          
-          // Verify if the parentId is properly set
-          const updatedDragNode = updatedNodes.find(n => n.id === dragNode.id);
-          logger.info('Updated drag node - AFTER:', {
-            nodeId: dragNode.id, 
-            hasParentNode: !!updatedDragNode?.parentId,
-            parentId: updatedDragNode?.parentId || 'none'
-          });
-          
-          return updatedNodes;
         });
 
-        // Update position in workflow store
-        logger.info('Updating position in workflow store with parent info:', {
-          nodeId: dragNode.id,
-          position: relativePosition,
-          parentId: overlappingNode.id
-        })
-        
-        // We need to store the parentId relationship in the block's data
-        // This ensures it's maintained across rerenders
+        // Update the block in workflow store
         const updatedBlock = {
           ...blocks[dragNode.id],
-          // Store the RELATIVE position directly, not absolute
-          position: {
-            x: relativePosition.x,
-            y: relativePosition.y
-          },
+          position: relativePosition,
           data: {
             ...blocks[dragNode.id].data,
             parentId: overlappingNode.id
           }
         };
         
-        // Update the block with the parent info
         useWorkflowStore.setState((state) => ({
           ...state,
           blocks: {
@@ -1125,21 +1175,13 @@ function WorkflowContent() {
           }
         }));
 
-        // Update loop dimensions in workflow store
-        logger.info('Updating loop dimensions in workflow store:', {
-          nodeId: overlappingNode.id,
-          width: requiredWidth,
-          height: requiredHeight
-        })
-        updateNodeDimensions(overlappingNode.id, { width: requiredWidth, height: requiredHeight })
-
-        // Initialize or update the loop's nodes array in the workflow store
+        // Update loop's nodes array in the workflow store
         const workflowStore = useWorkflowStore.getState()
-        const currentLoops = { ...workflowStore.loops }  // Create a new copy
+        const currentLoops = { ...workflowStore.loops }
         const loopId = overlappingNode.id
         
         if (!currentLoops[loopId]) {
-          // Create a new loop entry if it doesn't exist
+          // Create new loop entry
           currentLoops[loopId] = {
             id: loopId,
             nodes: [dragNode.id],
@@ -1148,22 +1190,20 @@ function WorkflowContent() {
             forEachItems: '',
           }
         } else if (!currentLoops[loopId].nodes.includes(dragNode.id)) {
-          // Add the dragged node to the existing loop's nodes array
+          // Add dragged node to existing loop
           currentLoops[loopId] = {
             ...currentLoops[loopId],
             nodes: [...currentLoops[loopId].nodes, dragNode.id]
           }
         }
 
-        // Update the store with the new loops state
         useWorkflowStore.setState({ loops: currentLoops })
       } else {
-        logger.info('Node not dropped on loop, resetting state')
-        // Reset any visual feedback state
+        // Node was not dropped on loop, reset any visual feedback
         setNodes((prevNodes) =>
           prevNodes.map((node) => {
             if (node.id === dragNode.id) {
-              // If the node was previously in a loop, remove it from that loop
+              // If node was previously in a loop, remove it from that loop
               if (node.parentId) {
                 const workflowStore = useWorkflowStore.getState()
                 const currentLoops = { ...workflowStore.loops }
@@ -1195,7 +1235,7 @@ function WorkflowContent() {
 
       overlappingNodeRef.current = null
     },
-    [setNodes, updateBlockPosition, updateNodeDimensions, edges, removeEdge, blocks]
+    [setNodes, blocks, edges, removeEdge, resizeLoopForChildBlock]
   )
 
   // Add diagnostic logging right before we return nodes
@@ -1275,6 +1315,7 @@ function WorkflowContent() {
           edgesFocusable={true}
           edgesUpdatable={true}
           className="workflow-container h-full"
+          nodeExtent={[[-10000, -10000], [10000, 10000]]} // Prevent constraint issues at boundaries
         >
           <Background />
         </ReactFlow>
