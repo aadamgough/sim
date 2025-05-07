@@ -361,3 +361,50 @@ input[type='search']::-ms-clear {
   transform-origin: center !important;
   position: absolute !important;
 }
+
+/* Remove default border from React Flow group nodes */
+.react-flow__node-group {
+  border: none !important;
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Prevent group nodes from showing double borders */
+.react-flow__node-group .react-flow__node-group {
+  border: none !important;
+  background-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove blue selection box from selected nodes */
+.react-flow__node.react-flow__node-group.selected {
+  box-shadow: none !important;
+  outline: none !important;
+  border: none !important;
+}
+
+/* Remove focus blue border that appears during tab navigation */
+.react-flow__node {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* Remove the parent SVG border outline */
+.react-flow__selection {
+  stroke: transparent !important;
+}
+
+/* Drag and drop styles for loop node */
+.react-flow__node-group.drag-highlight {
+  border: 2px solid #40E0D0 !important;
+  background-color: rgba(34,197,94,0.05) !important;
+}
+
+/* Enhanced drag detection */
+.react-flow__node-group.dragging-over {
+  border: 2px solid #40E0D0 !important;
+  background-color: rgba(34,197,94,0.05) !important;
+}

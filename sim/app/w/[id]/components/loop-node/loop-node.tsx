@@ -1,98 +1,118 @@
-import { memo, useCallback, useState, useEffect, useRef } from 'react'
+import { memo, useCallback, useState, useEffect } from 'react'
 import { Handle, NodeProps, Position, NodeResizer, useReactFlow } from 'reactflow'
-import { RepeatIcon, X, ChevronDown, PlayCircle } from 'lucide-react'
+import { RepeatIcon, X, PlayCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Card } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
-import Editor from 'react-simple-code-editor'
-import { highlight, languages } from 'prismjs'
-import 'prismjs/components/prism-javascript'
-import 'prismjs/themes/prism.css'
 
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   const { deleteElements, getNode, getNodes, setNodes } = useReactFlow()
   const {
-    loops,
     removeBlock,
-    updateLoopType,
-    updateLoopIterations,
-    updateLoopForEachItems,
     updateNodeDimensions
   } = useWorkflowStore()
   
-  // State for loop configuration
-  const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
-  const [inputPopoverOpen, setInputPopoverOpen] = useState(false)
-  const [inputValue, setInputValue] = useState(String(data.count || 5))
-  const [editorValue, setEditorValue] = useState(data.collection || '')
+  // State to track if a valid block is being dragged over
+  const [isValidDragOver, setIsValidDragOver] = useState(false)
   
-  // Ref to track child count changes
-  const prevChildCountRef = useRef<number>(0)
-
-  // Auto-resize effect when child nodes change
+  // Set up drag event handlers
   useEffect(() => {
-    const loopData = loops[id]
-    if (!loopData?.nodes) return
-
-    // Get current child node count
-    const currentChildCount = loopData.nodes.length
+    const nodeElement = document.querySelector(`[data-id="${id}"]`)
+    if (!nodeElement) return
     
-    // Only resize if the number of children has changed
-    if (currentChildCount !== prevChildCountRef.current) {
-      const currentWidth = data.width || 800
-      const currentHeight = data.height || 500
+    const handleDragOver = (e: Event) => {
+      e.preventDefault()
       
-      // Get all nodes in this loop
-      const childNodes = getNodes().filter(node => node.parentId === id)
-      if (childNodes.length === 0) return
-      
-      // Calculate the space needed for the child nodes
-      let rightmostPosition = 0
-      let bottommostPosition = 0
-      
-      childNodes.forEach(node => {
-        const nodeWidth = 320  // Default node width
-        const nodeHeight = 180 // Default node height
-        
-        const nodeRight = node.position.x + nodeWidth
-        const nodeBottom = node.position.y + nodeHeight
-        
-        rightmostPosition = Math.max(rightmostPosition, nodeRight)
-        bottommostPosition = Math.max(bottommostPosition, nodeBottom)
-      })
-      
-      // Add padding
-      const horizontalPadding = 350
-      const verticalPadding = 450
-      
-      const neededWidth = Math.max(800, rightmostPosition + horizontalPadding)
-      const neededHeight = Math.max(500, bottommostPosition + verticalPadding)
-      
-      // Only update if we need more space
-      if (neededWidth > currentWidth || neededHeight > currentHeight) {
-        logger.info('Auto-resizing loop node due to child count change:', { 
-          id, 
-          width: neededWidth, 
-          height: neededHeight,
-          prevCount: prevChildCountRef.current,
-          newCount: currentChildCount
-        })
-        updateNodeDimensions(id, { 
-          width: neededWidth, 
-          height: neededHeight 
-        })
+      try {
+        const dragEvent = e as DragEvent
+        if (dragEvent.dataTransfer?.getData) {
+          try {
+            const rawData = dragEvent.dataTransfer.getData('application/json')
+            if (rawData) {
+              const data = JSON.parse(rawData)
+              // Check if it's not a starter block
+              const type = data.type || (data.data && data.data.type)
+              if (type && type !== 'starter') {
+                setIsValidDragOver(true)
+                return
+              }
+            }
+          } catch (parseError) {
+            // Ignore parse errors
+          }
+        }
+        setIsValidDragOver(false)
+      } catch (err) {
+        setIsValidDragOver(false)
       }
-      
-      // Update the ref
-      prevChildCountRef.current = currentChildCount
     }
-  }, [loops, id, data.width, data.height, getNodes, updateNodeDimensions])
+    
+    const handleDragLeave = () => {
+      setIsValidDragOver(false)
+    }
+    
+    const handleDrop = () => {
+      setIsValidDragOver(false)
+    }
+    
+    nodeElement.addEventListener('dragover', handleDragOver as EventListener)
+    nodeElement.addEventListener('dragleave', handleDragLeave)
+    nodeElement.addEventListener('drop', handleDrop)
+    
+    return () => {
+      nodeElement.removeEventListener('dragover', handleDragOver as EventListener)
+      nodeElement.removeEventListener('dragleave', handleDragLeave)
+      nodeElement.removeEventListener('drop', handleDrop)
+    }
+  }, [id])
+  
+  const handleResize = useCallback((evt: any, { width, height }: { width: number; height: number }) => {
+    logger.info('Loop node resized:', { id, width, height })
+    
+    // Always ensure minimum dimensions
+    const minWidth = 800
+    const minHeight = 600
+    
+    const finalWidth = Math.max(width, minWidth)
+    const finalHeight = Math.max(height, minHeight)
+    
+    updateNodeDimensions(id, { width: finalWidth, height: finalHeight })
+    
+    // Update child node positions if needed
+    const childNodes = getNodes().filter(node => node.parentId === id)
+    if (childNodes.length > 0) {
+      // Check if any child nodes need to be repositioned
+      childNodes.forEach(node => {
+        const rightEdge = node.position.x + 320 // Approximate node width
+        const bottomEdge = node.position.y + 180 // Approximate node height
+        
+        // If node is outside new boundaries, reposition it
+        if (rightEdge > finalWidth - 100 || bottomEdge > finalHeight - 100) {
+          const newPos = {
+            x: Math.min(node.position.x, finalWidth - 420), // 100px from right edge
+            y: Math.min(node.position.y, finalHeight - 280), // 100px from bottom
+          }
+          
+          // Update node position if needed
+          if (newPos.x !== node.position.x || newPos.y !== node.position.y) {
+            setNodes(nodes => 
+              nodes.map(n => {
+                if (n.id === node.id) {
+                  return {
+                    ...n,
+                    position: newPos
+                  }
+                }
+                return n
+              })
+            )
+          }
+        }
+      })
+    }
+  }, [id, updateNodeDimensions, getNodes, setNodes])
 
   const onDelete = () => {
     // Delete this loop node
@@ -103,79 +123,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     }
   }
 
-  const handleLoopTypeChange = (loopType: 'for' | 'forEach') => {
-    logger.info('Changing loop type:', { id, loopType })
-    updateLoopType(id, loopType)
-    setLabelPopoverOpen(false)
-  }
-
-  const getLoopLabel = () => {
-    switch (data.loopType) {
-      case 'for':
-        return 'For loop'
-      case 'forEach':
-        return 'For each'
-      default:
-        return 'For loop'
-    }
-  }
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInputValue(e.target.value)
-  }
-
-  const handleInputSave = () => {
-    // Validate input (must be a number between 1 and 50)
-    const numValue = parseInt(inputValue)
-    if (!isNaN(numValue) && numValue >= 1 && numValue <= 50) {
-      updateLoopIterations(id, numValue)
-    } else {
-      // Reset to current value if invalid
-      setInputValue(String(data.count || 5))
-    }
-    setInputPopoverOpen(false)
-  }
-
-  const handleEditorChange = (value: string) => {
-    setEditorValue(value)
-    updateLoopForEachItems(id, value)
-  }
-
-  const getInputLabel = () => {
-    switch (data.loopType) {
-      case 'for':
-        return `Iterations: ${data.count || 5}`
-      case 'forEach':
-        return 'Items'
-      default:
-        return `Iterations: ${data.count || 5}`
-    }
-  }
-
-  const handleResize = useCallback((evt: any, { width, height }: { width: number; height: number }) => {
-    logger.info('Loop node resized:', { id, width, height })
-    
-    // Always ensure minimum dimensions
-    const minWidth = 800
-    const minHeight = 500
-    
-    const finalWidth = Math.max(width, minWidth)
-    const finalHeight = Math.max(height, minHeight)
-    
-    updateNodeDimensions(id, { width: finalWidth, height: finalHeight })
-  }, [id, updateNodeDimensions])
-
-  logger.info('Rendering loop node:', { 
-    id, 
-    selected, 
-    data: {
-      label: data.label,
-      state: data.state,
-    }
-  })
-
   return (
-    <div className="group relative">
+    <div className="relative">
       <NodeResizer 
         minWidth={800} 
         minHeight={600}
@@ -185,154 +134,44 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         keepAspectRatio={false}
         onResize={handleResize}
       />
-      <Card 
-        className={cn(
-          'relative flex flex-col min-w-[800px] min-h-[600px] bg-background/50 p-4',
-          'border-2 border-dashed border-gray-400',
-          'transition-all duration-200',
-          selected && 'ring-2 ring-primary ring-offset-2',
-          'drag-target'
-        )}
+      <div 
         style={{
           width: data.width || 800,
           height: data.height || 600,
-          pointerEvents: 'all',
-          borderColor: data?.state === 'valid' ? '#40E0D0' : undefined,
-          backgroundColor: data?.state === 'valid' ? 'rgba(34, 197, 94, 0.05)' : undefined,
+          border: isValidDragOver ? '2px solid #40E0D0' : '2px dashed #94a3b8',
+          backgroundColor: isValidDragOver ? 'rgba(34,197,94,0.05)' : 'transparent',
+          borderRadius: '8px',
+          position: 'relative',
+          boxShadow: 'none',
+          outline: 'none !important',
         }}
+        className={cn(
+          'transition-all duration-200',
+          selected && '!ring-0 !border-none !outline-none !shadow-none',
+          data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]'
+        )}
       >
-        <button
-          className={cn(
-            'absolute right-2 top-2 p-1 rounded-md hover:bg-accent',
-            'opacity-0 group-hover:opacity-100 transition-opacity',
-            'text-muted-foreground hover:text-foreground'
-          )}
-          onClick={onDelete}
-        >
-          <X className="h-4 w-4" />
-        </button>
-
-        <div className="flex items-center gap-2 mb-4 workflow-drag-handle cursor-move">
-          <div className="flex items-center justify-center w-7 h-7 rounded bg-[#40E0D0]">
-            <RepeatIcon className="w-5 h-5 text-white" />
+        {/* Simple header with icon and label */}
+        <div className="flex items-center px-3 py-2 bg-background rounded-t-lg workflow-drag-handle cursor-move border-b border-dashed border-gray-300">
+          <div className="flex items-center justify-center w-6 h-6 rounded bg-[#40E0D0] mr-2">
+            <RepeatIcon className="w-4 h-4 text-white" />
+          </div>
+          <div className="font-medium text-sm">
+            {data.label || 'Loop'} - {data.loopType === 'for' ? `${data.count || 5} iterations` : 'For each'}
           </div>
           
-          {/* Loop Type Selection */}
-          <Popover open={labelPopoverOpen} onOpenChange={setLabelPopoverOpen}>
-            <PopoverTrigger asChild>
-              <Badge
-                variant="outline"
-                className={cn(
-                  'bg-background border-border text-foreground font-medium pr-1.5 pl-2.5 py-0.5 text-sm',
-                  'hover:bg-accent/50 transition-colors duration-150 cursor-pointer',
-                  'flex items-center gap-1'
-                )}
-              >
-                {getLoopLabel()}
-                <ChevronDown className="h-3 w-3 text-muted-foreground" />
-              </Badge>
-            </PopoverTrigger>
-            <PopoverContent className="w-36 p-1" align="start">
-              <div className="text-sm">
-                <div
-                  className={cn(
-                    'px-2 py-1.5 rounded-md cursor-pointer hover:bg-accent/50 transition-colors duration-150',
-                    data.loopType === 'for' && 'bg-accent'
-                  )}
-                  onClick={() => handleLoopTypeChange('for')}
-                >
-                  <span>For loop</span>
-                </div>
-                <div
-                  className={cn(
-                    'px-2 py-1.5 rounded-md cursor-pointer hover:bg-accent/50 transition-colors duration-150',
-                    data.loopType === 'forEach' && 'bg-accent'
-                  )}
-                  onClick={() => handleLoopTypeChange('forEach')}
-                >
-                  <span>For each</span>
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
-
-          {/* Loop Input Configuration */}
-          <Popover open={inputPopoverOpen} onOpenChange={setInputPopoverOpen}>
-            <PopoverTrigger asChild>
-              <Badge
-                variant="outline"
-                className={cn(
-                  'bg-background border-border text-foreground font-medium px-2.5 py-0.5 text-sm',
-                  'hover:bg-accent/50 transition-colors duration-150 cursor-pointer'
-                )}
-              >
-                {getInputLabel()}
-              </Badge>
-            </PopoverTrigger>
-            <PopoverContent className="w-52 p-3" align="start">
-              <div>
-                <div className="text-sm font-medium mb-2">
-                  {data.loopType === 'for' ? 'Number of iterations' : 'Collection to iterate over'}
-                </div>
-
-                {data.loopType === 'for' ? (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="text"
-                      value={inputValue}
-                      onChange={handleInputChange}
-                      onBlur={handleInputSave}
-                      className="h-8 text-sm"
-                    />
-                  </div>
-                ) : (
-                  <div className="relative min-h-[80px] rounded-md bg-background font-mono text-sm px-3 pt-2 pb-3 border border-input">
-                    <Editor
-                      value={editorValue}
-                      onValueChange={handleEditorChange}
-                      highlight={(code) => highlight(code, languages.javascript, 'javascript')}
-                      padding={0}
-                      style={{
-                        fontFamily: 'monospace',
-                        lineHeight: '21px',
-                      }}
-                      className="focus:outline-none w-full"
-                      textareaClassName="focus:outline-none focus:ring-0 bg-transparent resize-none w-full"
-                    />
-                  </div>
-                )}
-
-                <div className="text-[10px] text-muted-foreground">
-                  {data.loopType === 'for'
-                    ? 'Enter a number between 1 and 50'
-                    : 'Array or object to iterate over'}
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
+          <button
+            className="ml-auto p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
+            onClick={onDelete}
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-
-        {/* Container for child nodes */}
-        <div className={cn(
-          "flex-1 border border-dashed rounded-md p-2 transition-all duration-200 mt-4",
-          data?.state === 'valid' ? 'border-green-500/30 bg-green-50/5' : 'border-gray-300',
-          "relative min-h-[100px]",
-          "group-hover:border-primary/30",
-          "after:content-['Connect blocks to loop start'] after:absolute after:top-1 after:left-1/2 after:-translate-x-1/2 after:-translate-y-1/2 after:text-muted-foreground/50 after:pointer-events-none after:opacity-0 after:transition-opacity group-hover:after:opacity-100",
-          "loop-drop-container",
-          "smooth-drag-container will-change-transform"
-        )}
-        style={{
-          transform: 'translate3d(0,0,0)',
-          backfaceVisibility: 'hidden',
-          WebkitBackfaceVisibility: 'hidden', 
-          perspective: 1000,
-          WebkitPerspective: 1000
-        }}
-        data-draggable="false"
-        >
-          {/* Simple Static Loop Start Block */}
-          <div className="absolute top-20 left-10 w-28 flex flex-col items-center">
+        
+        {/* Child nodes container */}
+        <div className="p-4 h-[calc(100%-40px)]" data-dragarea="true">
+          {/* Loop Start Block - positioned at left middle */}
+          <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
             <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative">
               <div className="flex items-center justify-center gap-1.5">
                 <PlayCircle size={16} className="text-[#40E0D0]" />
@@ -341,7 +180,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
                 {data?.loopType === 'for' ? `${data?.count || 5} iterations` : 'For each item'}
               </div>
               
-              {/* Fixed, stable handle position */}
               <Handle
                 type="source"
                 position={Position.Right}
@@ -355,21 +193,20 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
               />
             </div>
           </div>
-          
-          {/* Child nodes are rendered here by React Flow */}
         </div>
 
+        {/* Input handle on left middle */}
         <Handle
           type="target"
           position={Position.Left}
           className="!bg-gray-400 !w-3 !h-3"
+          style={{ 
+            left: "-6px", 
+            top: "50%",
+            transform: "translateY(-50%)" 
+          }}
         />
-        <Handle
-          type="target"
-          position={Position.Right}
-          className="!bg-gray-400 !w-3 !h-3"
-        />
-      </Card>
+      </div>
     </div>
   )
 })

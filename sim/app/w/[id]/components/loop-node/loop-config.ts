@@ -9,15 +9,18 @@ export const LoopTool = {
   bgColor: '#40E0D0',
   data: {
     label: 'Loop',
-    loopType: 'while',
+    loopType: 'for',
     condition: '',
-    count: 1,
+    count: 5,
     collection: '',
+    width: 800,
+    height: 600,
   },
   style: {
     width: 800,
-    height: 400,
+    height: 600,
   },
   dragHandle: '.workflow-drag-handle',
-  // Additional properties for workflow store
+  // Ensure React Flow knows to render this as a group
+  reactFlowType: 'group'
 } 

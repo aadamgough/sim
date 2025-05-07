@@ -4,7 +4,11 @@ import { useCallback } from 'react'
 // Custom component for the Loop Tool
 export default function LoopToolbarItem () {
     const handleDragStart = (e: React.DragEvent) => {
-      e.dataTransfer.setData('application/json', JSON.stringify(LoopTool))
+      // Only send the essential data for the loop node
+      const simplifiedData = {
+        type: 'loop'
+      }
+      e.dataTransfer.setData('application/json', JSON.stringify(simplifiedData))
       e.dataTransfer.effectAllowed = 'move'
     }
     

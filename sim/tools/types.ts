@@ -64,6 +64,7 @@ export interface ToolConfig<P = any, R = any> {
   // Response handling
   transformResponse?: (response: Response, params?: P) => Promise<R>
   transformError?: (error: any) => string | Promise<R>
+  parentId?: string
 }
 
 export interface TableRow {

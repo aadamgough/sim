@@ -165,6 +165,7 @@ export interface BlockConfig<T extends ToolResponse = ToolResponse> {
     }
   }
   hideFromToolbar?: boolean
+  parentId?: string
 }
 
 // Output configuration rules
