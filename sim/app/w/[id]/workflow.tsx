@@ -52,6 +52,7 @@ function WorkflowContent() {
   const params = useParams()
   const router = useRouter()
   const { project } = useReactFlow()
+  const reactFlowInstance = useReactFlow()
 
   // Store access
   const { workflows, setActiveWorkflow, createWorkflow } = useWorkflowRegistry()
@@ -223,6 +224,91 @@ function WorkflowContent() {
     }
   }, [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle])
 
+  // Transform blocks and loops into ReactFlow nodes
+  const nodes = useMemo(() => {
+    const nodeArray: any[] = []
+    logger.info('Creating nodes from blocks:', { blockCount: Object.keys(blocks).length })
+
+    // Add block nodes
+    Object.entries(blocks).forEach(([blockId, block]) => {
+      if (!block.type || !block.name) {
+        logger.warn(`Skipping invalid block: ${blockId}`, { block })
+        return
+      }
+
+      // Handle loop nodes
+      if (block.type === 'loop') {
+        logger.info('Creating loop node in useMemo:', { id: block.id, data: block.data })
+        nodeArray.push({
+          id: block.id,
+          type: 'group',
+          position: block.position,
+          dragHandle: '.workflow-drag-handle',
+          style: {
+            width: block.data?.width || 800,
+            height: block.data?.height || 600,
+            backgroundColor: 'transparent',
+            border: 'none',
+            boxShadow: 'none',
+            outline: 'none',
+          },
+          data: {
+            ...block.data,
+            label: block.name,
+            loopType: block.data?.loopType || 'for',
+            count: block.data?.count || 5,
+            collection: block.data?.collection || '',
+            width: block.data?.width || 800,
+            height: block.data?.height || 600,
+          },
+        })
+        return
+      }
+
+      const blockConfig = getBlock(block.type)
+      if (!blockConfig) {
+        logger.error(`No configuration found for block type: ${block.type}`, {
+          block,
+        })
+        return
+      }
+
+      const isActive = activeBlockIds.has(block.id)
+      const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
+
+      // Calculate position relative to parent if it exists
+      let position = block.position
+      if (block.data?.parentId) {
+        const parentBlock = blocks[block.data.parentId]
+        if (parentBlock) {
+          position = {
+            x: block.position.x - parentBlock.position.x,
+            y: block.position.y - parentBlock.position.y,
+          }
+        }
+      }
+
+      nodeArray.push({
+        id: block.id,
+        type: 'workflowBlock',
+        position,
+        parentId: block.data?.parentId,
+        dragHandle: '.workflow-drag-handle',
+        data: {
+          type: block.type,
+          config: blockConfig,
+          name: block.name,
+          isActive,
+          isPending,
+          parentId: block.data?.parentId,
+        },
+      })
+    })
+
+    logger.info('Final node array:', { nodeCount: nodeArray.length })
+    return nodeArray
+  }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled])
+
   // Update the onDrop handler
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -243,13 +329,64 @@ function WorkflowContent() {
           return
         }
         
-        if (type === 'connectionBlock') return
+        if (type === 'connectionBlock' || type === 'starter') {
+          logger.info('Ignoring drop for connectionBlock or starter')
+          return
+        }
 
         const reactFlowBounds = event.currentTarget.getBoundingClientRect()
         const position = project({
           x: event.clientX - reactFlowBounds.left,
           y: event.clientY - reactFlowBounds.top,
         })
+        logger.info('Drop position:', { position, clientX: event.clientX, clientY: event.clientY })
+
+        // Check if drop is inside a loop node
+        const loopNodes = nodes.filter(node => node.type === 'group')
+        logger.info('Found loop nodes:', { count: loopNodes.length, loopNodes })
+        
+        const dropPoint = { x: event.clientX, y: event.clientY }
+        logger.info('Drop point:', dropPoint)
+        
+        let parentLoopNode = null
+        for (const loopNode of loopNodes) {
+          //use reactFlowInstance to get the node
+          const loopElement = reactFlowInstance.getNode(loopNode.id)
+          if (loopElement) {
+            // Instead of getBoundingClientRect, use the node's position and dimensions
+            const { position, data } = loopElement
+            const width = data?.width || 800
+            const height = data?.height || 600
+            const rect = {
+              left: position.x,
+              top: position.y,
+              right: position.x + width,
+              bottom: position.y + height,
+              width,
+              height,
+            }
+            logger.info('Checking loop node bounds:', { 
+              id: loopNode.id, 
+              rect,
+              isInside: (
+                position.x <= position.x &&
+                position.x + width >= position.x &&
+                position.y <= position.y &&
+                position.y + height >= position.y
+              )
+            })
+            if (
+              position.x <= position.x &&
+              position.x + width >= position.x &&
+              position.y <= position.y &&
+              position.y + height >= position.y
+            ) {
+              parentLoopNode = loopNode
+              logger.info('Found parent loop node:', { id: loopNode.id })
+              break
+            }
+          }
+        }
 
         // Special handling for loop nodes
         if (type === 'loop') {
@@ -265,6 +402,7 @@ function WorkflowContent() {
             count: 5,
             collection: '',
           })
+          logger.info('Added new loop node:', { id, name, position })
 
           // Auto-connect logic
           const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
@@ -280,6 +418,7 @@ function WorkflowContent() {
                 targetHandle: 'target',
                 type: 'workflowEdge',
               })
+              logger.info('Auto-connected loop node:', { source: closestBlock.id, target: id })
             }
           }
           return
@@ -297,7 +436,13 @@ function WorkflowContent() {
           Object.values(blocks).filter((b) => b.type === type).length + 1
         }`
 
-        addBlock(id, type, name, position)
+        // Add block with parent ID if dropped inside a loop
+        const blockData = {
+          parentId: parentLoopNode
+        }
+        logger.info('Adding new block:', { id, type, name, position, blockData })
+        
+        addBlock(id, type, name, position, blockData)
 
         // Auto-connect logic
         const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
@@ -305,7 +450,6 @@ function WorkflowContent() {
           const closestBlock = findClosestOutput(position)
           if (closestBlock) {
             const sourceHandle = determineSourceHandle(closestBlock)
-
             addEdge({
               id: crypto.randomUUID(),
               source: closestBlock.id,
@@ -314,6 +458,7 @@ function WorkflowContent() {
               targetHandle: 'target',
               type: 'workflowEdge',
             })
+            logger.info('Auto-connected block:', { source: closestBlock.id, target: id })
           }
         }
       } catch (err) {
@@ -322,6 +467,77 @@ function WorkflowContent() {
     },
     [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle]
   )
+
+  // Update the onDragOver handler
+  const onDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault()
+    
+    try {
+      const targetElement = event.target as HTMLElement
+      const loopNode = targetElement.closest('.react-flow__node-group')
+      
+      if (loopNode) {
+        logger.info('Drag over loop node:', { 
+          id: loopNode.getAttribute('data-id'),
+          clientX: event.clientX,
+          clientY: event.clientY
+        })
+        
+        // Try to get data about what's being dragged
+        const rawData = event.dataTransfer.getData('application/json')
+        if (rawData) {
+          const data = JSON.parse(rawData)
+          const type = data.type || (data.data && data.data.type)
+          logger.info('Dragging block type:', { type })
+          
+          // Only highlight if it's not a starter block
+          if (type && type !== 'starter' && type !== 'connectionBlock') {
+            loopNode.classList.add('dragging-over')
+            logger.info('Added dragging-over class to loop node')
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('Error in onDragOver:', { error })
+    }
+  }, [])
+
+  // Update the onNodesChange handler
+  const onNodesChange = useCallback(
+    (changes: any) => {
+      changes.forEach((change: any) => {
+        if (change.type === 'position' && change.position) {
+          const node = nodes.find((n) => n.id === change.id)
+          if (!node) return
+
+          // If node has a parent, update position relative to parent
+          if (node.parentId) {
+            const parentBlock = blocks[node.parentId]
+            if (parentBlock) {
+              const absolutePosition = {
+                x: change.position.x + parentBlock.position.x,
+                y: change.position.y + parentBlock.position.y,
+              }
+              updateBlockPosition(change.id, absolutePosition)
+            }
+          } else {
+            updateBlockPosition(change.id, change.position)
+          }
+        }
+      })
+    },
+    [nodes, blocks, updateBlockPosition]
+  )
+
+  // Update the onDragEnd handler
+  const onDragEnd = useCallback(() => {
+    // Remove highlighting from all loop nodes
+    const highlightedNodes = document.querySelectorAll('.react-flow__node-group.dragging-over')
+    logger.info('Removing drag highlight from nodes:', { count: highlightedNodes.length })
+    highlightedNodes.forEach(node => {
+      node.classList.remove('dragging-over')
+    })
+  }, [])
 
   // Init workflow
   useEffect(() => {
@@ -378,103 +594,6 @@ function WorkflowContent() {
     markAllAsRead,
     resetVariablesLoaded,
   ])
-
-  // Transform blocks and loops into ReactFlow nodes
-  const nodes = useMemo(() => {
-    const nodeArray: any[] = []
-    logger.info('Creating nodes from blocks:', { blockCount: Object.keys(blocks).length })
-
-    // Add block nodes
-    Object.entries(blocks).forEach(([blockId, block]) => {
-      if (!block.type || !block.name) {
-        logger.warn(`Skipping invalid block: ${blockId}`, { block })
-        return
-      }
-
-      // Handle loop nodes
-      if (block.type === 'loop') {
-        logger.info('Creating loop node in useMemo:', { id: block.id, data: block.data })
-        nodeArray.push({
-          id: block.id,
-          type: 'group',
-          position: block.position,
-          dragHandle: '.workflow-drag-handle',
-          style: {
-            width: block.data?.width || 800,
-            height: block.data?.height || 600,
-            backgroundColor: 'transparent',
-            border: 'none',
-            boxShadow: 'none',
-            outline: 'none',
-          },
-          data: {
-            ...block.data,
-            label: block.name,
-            loopType: block.data?.loopType || 'for',
-            count: block.data?.count || 5,
-            collection: block.data?.collection || '',
-            width: block.data?.width || 800,
-            height: block.data?.height || 600,
-          },
-        })
-        return
-      }
-
-      const blockConfig = getBlock(block.type)
-      if (!blockConfig) {
-        logger.error(`No configuration found for block type: ${block.type}`, {
-          block,
-        })
-        return
-      }
-
-      const isActive = activeBlockIds.has(block.id)
-      const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
-
-      nodeArray.push({
-        id: block.id,
-        type: 'workflowBlock',
-        position: block.position,
-        dragHandle: '.workflow-drag-handle',
-        data: {
-          type: block.type,
-          config: blockConfig,
-          name: block.name,
-          isActive,
-          isPending,
-        },
-      })
-    })
-
-    logger.info('Final node array:', { nodeCount: nodeArray.length })
-    return nodeArray
-  }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled])
-
-  // Update nodes
-  const onNodesChange = useCallback(
-    (changes: any) => {
-      changes.forEach((change: any) => {
-        if (change.type === 'position' && change.position) {
-          const node = nodes.find((n) => n.id === change.id)
-          if (!node) return
-
-          if (node.parentId) {
-            const loopNode = nodes.find((n) => n.id === node.parentId)
-            if (loopNode) {
-              const absolutePosition = {
-                x: change.position.x + loopNode.position.x,
-                y: change.position.y + loopNode.position.y,
-              }
-              updateBlockPosition(change.id, absolutePosition)
-            }
-          } else {
-            updateBlockPosition(change.id, change.position)
-          }
-        }
-      })
-    },
-    [nodes, updateBlockPosition]
-  )
 
   // Update edges
   const onEdgesChange = useCallback(
@@ -556,40 +675,6 @@ function WorkflowContent() {
       )
     }
   }, [setSubBlockValue])
-
-  // Update the onDragOver handler for ReactFlow
-  const onDragOver = useCallback((event: React.DragEvent) => {
-    event.preventDefault()
-    
-    // Add highlighting for loop nodes
-    try {
-      const targetElement = event.target as HTMLElement
-      const loopNode = targetElement.closest('.react-flow__node-group')
-      if (loopNode) {
-        // Try to get data about what's being dragged
-        const rawData = event.dataTransfer.getData('application/json')
-        if (rawData) {
-          const data = JSON.parse(rawData)
-          const type = data.type || (data.data && data.data.type)
-          
-          // Only highlight if it's not a starter block
-          if (type && type !== 'starter') {
-            loopNode.classList.add('dragging-over')
-          }
-        }
-      }
-    } catch (error) {
-      // Ignore errors
-    }
-  }, [])
-
-  // Add a drag end handler
-  const onDragEnd = useCallback(() => {
-    // Remove highlighting from all loop nodes
-    document.querySelectorAll('.react-flow__node-group.dragging-over').forEach(node => {
-      node.classList.remove('dragging-over')
-    })
-  }, [])
 
   if (!isInitialized) {
     return (
