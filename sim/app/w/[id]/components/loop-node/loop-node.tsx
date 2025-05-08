@@ -6,7 +6,7 @@ import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
 import { getBlock } from '@/blocks'
 import { useGeneralStore } from '@/stores/settings/general/store'
-import { LoopActionBar } from './loop-action-bar'
+import { LoopActionBar } from './components/loop-action-bar'
 
 const logger = createLogger('LoopNode')
 
@@ -134,8 +134,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       }
       
       // Ensure the position is within reasonable bounds
-      relativePosition.x = Math.max(50, Math.min(relativePosition.x, Number(loopNode.style?.width || 800) - 150))
-      relativePosition.y = Math.max(50, Math.min(relativePosition.y, Number(loopNode.style?.height || 1000) - 150))
+      relativePosition.x = Math.max(50, Math.min(relativePosition.x, Number(loopNode.style?.width || 800)))
+      relativePosition.y = Math.max(50, Math.min(relativePosition.y, Number(loopNode.style?.height || 1000)))
       
       // Calculate the absolute position (used for storage)
       const absolutePosition = {
@@ -450,11 +450,13 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         const rightEdge = node.position.x + 320 // Approximate node width
         const bottomEdge = node.position.y + 180 // Approximate node height
         
-        // If node is outside new boundaries, reposition it
-        if (rightEdge > finalWidth - 100 || bottomEdge > finalHeight - 100) {
+        // Only reposition nodes that are completely outside the boundaries
+        if (node.position.x > finalWidth || node.position.y > finalHeight) {
           const newPos = {
-            x: Math.min(node.position.x, finalWidth - 120), // 100px from right edge
-            y: Math.min(node.position.y, finalHeight - 280), // 100px from bottom
+            // Keep x position if possible, only constrain if completely outside
+            x: node.position.x > finalWidth ? finalWidth - 20 : node.position.x,
+            // Keep y position if possible, only constrain if completely outside
+            y: node.position.y > finalHeight ? finalHeight - 20 : node.position.y,
           }
           
           // Update node position if needed
@@ -476,29 +478,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     }
   }, [id, updateNodeDimensions, getNodes, setNodes])
 
-  const onDelete = () => {
-    // Find all child nodes to delete them as well
-    const childNodeIds = getNodes()
-      .filter(node => node.parentId === id)
-      .map(node => node.id);
-    
-    logger.info('Deleting loop node and children:', { loopId: id, childCount: childNodeIds.length });
-    
-    // Delete the loop node (will trigger workflow store's removeBlock)
-    const node = getNode(id);
-    if (node) {
-      deleteElements({ nodes: [node] });
-      
-      // Use the workflow store's removeBlock which handles cleanup properly
-      removeBlock(id);
-      
-      // Delete any child nodes that might not be automatically cleaned up
-      childNodeIds.forEach(childId => {
-        removeBlock(childId);
-      });
-    }
-  };
-
   // Remove the problematic boundary enforcement effect
   useEffect(() => {
     // Cleanup only
@@ -506,250 +485,246 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   }, []);
 
   return (
-    <div 
-      className="relative group-node-container"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      <NodeResizer 
-        minWidth={800} 
-        minHeight={1000}
-        isVisible={false}
-        lineClassName="border-primary border-2"
-        handleClassName="h-4 w-4 bg-primary border-primary"
-        handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
-        keepAspectRatio={false}
-        onResize={handleResize}
-      />
+    <div className="relative group">
       <div 
-        style={{
-          width: data.width || 800,
-          height: data.height || 1000,
-          border: isValidDragOver ? '2px solid #40E0D0' : 
-                  isHovered ? '2px solid #1e293b' : 
-                  selected ? '2px solid #94a3b8' : 
-                  '2px dashed #94a3b8',
-          backgroundColor: isValidDragOver ? 'rgba(64,224,208,0.08)' : 'transparent',
-          borderRadius: '8px',
-          position: 'relative',
-          boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
-          overflow: 'visible', // Allow children to overflow
-          transition: 'border-color 0.2s, background-color 0.2s, box-shadow 0.2s',
-        }}
-        className={cn(
-          'transition-all duration-200 group-node',
-          data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
-          isHovered && 'hover-highlight'
-        )}
-        onDrop={handleDrop}
-        data-node-id={id}
-        data-type="group"
+        className="relative group-node-container"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       >
-        {/* Simplified loop node header */}
-        <div className="flex items-center px-3 py-2 bg-background rounded-t-lg workflow-drag-handle cursor-move border-b border-dashed border-gray-300">
-          <div className="flex items-center justify-center w-6 h-6 rounded bg-[#40E0D0] mr-2">
-            <RepeatIcon className="w-4 h-4 text-white" />
+        <NodeResizer 
+          minWidth={800} 
+          minHeight={1000}
+          isVisible={false}
+          lineClassName="border-primary border-2"
+          handleClassName="h-4 w-4 bg-primary border-primary"
+          handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
+          keepAspectRatio={false}
+          onResize={handleResize}
+        />
+        <div 
+          style={{
+            width: data.width || 800,
+            height: data.height || 1000,
+            border: isValidDragOver ? '2px solid #40E0D0' : 
+                    isHovered ? '2px solid #1e293b' : 
+                    selected ? '2px solid #94a3b8' : 
+                    '2px dashed #94a3b8',
+            backgroundColor: isValidDragOver ? 'rgba(64,224,208,0.08)' : 'transparent',
+            borderRadius: '8px',
+            position: 'relative',
+            boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
+            overflow: 'visible', // Allow children to overflow
+            transition: 'border-color 0.2s, background-color 0.2s, box-shadow 0.2s',
+          }}
+          className={cn(
+            'transition-all duration-200 group-node',
+            data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
+            isHovered && 'hover-highlight'
+          )}
+          onDrop={handleDrop}
+          data-node-id={id}
+          data-type="group"
+        >
+          {/* Simplified loop node header */}
+          <div className="flex items-center px-3 py-2 bg-background rounded-t-lg workflow-drag-handle cursor-move border-b border-dashed border-gray-300">
+            <div className="flex items-center justify-center w-6 h-6 rounded bg-[#40E0D0] mr-2">
+              <RepeatIcon className="w-4 h-4 text-white" />
+            </div>
+            
+            <div className="flex-1 flex items-center">
+              <div className="font-medium text-sm">
+                {data.label || 'Loop'} 
+                <span className="text-xs ml-2 text-muted-foreground">
+                  {loopType === 'for' 
+                    ? `(${iterations} iterations)` 
+                    : '(For each item)'}
+                </span>
+              </div>
+            </div>
           </div>
           
-          <div className="flex-1 flex items-center">
-            <div className="font-medium text-sm">
-              {data.label || 'Loop'} 
-              <span className="text-xs ml-2 text-muted-foreground">
-                {loopType === 'for' 
-                  ? `(${iterations})` 
-                  : '(For each item)'}
-              </span>
-            </div>
-          </div>
-        </div>
-        
-        {/* Child nodes container */}
-        <div 
-          className="p-4 h-[calc(100%-40px)]" 
-          data-dragarea="true"
-          style={{
-            position: 'relative',
-            minHeight: '100%',
-            transform: 'none', // Ensure no transforms affect child positioning
-          }}
-        >
-          {/* Loop Start Block - positioned at left middle */}
-          <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
-            <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative hover:bg-[#40E0D0]/30 transition-colors">
-              <div className="flex items-center justify-center gap-1.5">
-                <PlayCircle size={16} className="text-[#40E0D0]" />
-              </div>
-              
-              <div className="absolute -right-3 top-0 h-full flex items-center">
-                <Handle
-                  type="source"
-                  position={Position.Right}
-                  id="loop-start-source"
-                  className="!bg-[#40E0D0] !w-3 !h-3 z-50"
-                />
-              </div>
-              
-              {/* Visual flow indicator */}
-              <div className="absolute -right-12 top-1/2 transform -translate-y-1/2">
-                <svg width="12" height="12" viewBox="0 0 12 12" className="text-[#40E0D0]/70">
-                </svg>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Loop Actions Sidebar */}
-        <LoopActionBar nodeId={id} data={data} />
-
-        {/* Custom resize handle visible in the bottom right corner */}
-        <div
-          className="absolute bottom-0 right-0 w-10 h-10 cursor-nwse-resize z-10 group hover:bg-gray-100/10 rounded-bl-lg"
-          style={{
-            pointerEvents: 'all',
-            transform: 'translate(2px, 2px)',
-          }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            // Store the mouse coordinates for use after timeout
-            const clientX = e.clientX;
-            const clientY = e.clientY;
-            const startX = clientX;
-            const startY = clientY;
-            
-            logger.info('Resize handle clicked, looking for ReactFlow resizer:', { id });
-            
-            // Use a small timeout to ensure ReactFlow has fully initialized its resize handlers
-            setTimeout(() => {
-              try {
-                // Try several selector strategies
-                let resizerHandle = document.querySelector(`[data-id="${id}"] .react-flow__resize-control.bottom-right`);
+          {/* Child nodes container */}
+          <div 
+            className="p-4 h-[calc(100%-40px)]" 
+            data-dragarea="true"
+            style={{
+              position: 'relative',
+              minHeight: '100%',
+              transform: 'none', // Ensure no transforms affect child positioning
+            }}
+          >
+            {/* Loop Start Block - positioned at left middle */}
+            <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
+              <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative hover:bg-[#40E0D0]/30 transition-colors">
+                <div className="flex items-center justify-center gap-1.5">
+                  <PlayCircle size={16} className="text-[#40E0D0]" />
+                </div>
                 
-                // If specific class selector doesn't work, try to find by position attribute
-                if (!resizerHandle) {
-                  const allResizeControls = document.querySelectorAll(`[data-id="${id}"] .react-flow__resize-control`);
-                  logger.info(`Found ${allResizeControls.length} resize controls`);
+                <div >
+                  <Handle
+                    type="source"
+                    position={Position.Right}
+                    id="loop-start-source"
+                    className="!bg-[#40E0D0] !w-3 !h-3 z-40"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Custom resize handle visible in the bottom right corner */}
+          <div
+            className="absolute bottom-0 right-0 w-10 h-10 cursor-nwse-resize z-10 group hover:bg-gray-100/10 rounded-bl-lg"
+            style={{
+              pointerEvents: 'all',
+              transform: 'translate(2px, 2px)',
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              
+              // Store the mouse coordinates for use after timeout
+              const clientX = e.clientX;
+              const clientY = e.clientY;
+              const startX = clientX;
+              const startY = clientY;
+              
+              logger.info('Resize handle clicked, looking for ReactFlow resizer:', { id });
+              
+              // Use a small timeout to ensure ReactFlow has fully initialized its resize handlers
+              setTimeout(() => {
+                try {
+                  // Try several selector strategies
+                  let resizerHandle = document.querySelector(`[data-id="${id}"] .react-flow__resize-control.bottom-right`);
                   
-                  // Find the bottom-right handle by checking all resize controls
-                  for (const control of Array.from(allResizeControls)) {
-                    const rect = control.getBoundingClientRect();
-                    const controlElement = control as HTMLElement;
-                    const style = window.getComputedStyle(controlElement);
+                  // If specific class selector doesn't work, try to find by position attribute
+                  if (!resizerHandle) {
+                    const allResizeControls = document.querySelectorAll(`[data-id="${id}"] .react-flow__resize-control`);
+                    logger.info(`Found ${allResizeControls.length} resize controls`);
                     
-                    // Log position info to help debug
-                    logger.info('Resize control position:', { 
-                      right: style.right, 
-                      bottom: style.bottom,
-                      transform: style.transform
-                    });
+                    // Find the bottom-right handle by checking all resize controls
+                    for (const control of Array.from(allResizeControls)) {
+                      const rect = control.getBoundingClientRect();
+                      const controlElement = control as HTMLElement;
+                      const style = window.getComputedStyle(controlElement);
+                      
+                      // Log position info to help debug
+                      logger.info('Resize control position:', { 
+                        right: style.right, 
+                        bottom: style.bottom,
+                        transform: style.transform
+                      });
+                      
+                      // Bottom-right handle will typically have 'right' and 'bottom' set to 0
+                      if (style.right === '0px' && style.bottom === '0px') {
+                        resizerHandle = control;
+                        break;
+                      }
+                    }
                     
-                    // Bottom-right handle will typically have 'right' and 'bottom' set to 0
-                    if (style.right === '0px' && style.bottom === '0px') {
-                      resizerHandle = control;
-                      break;
+                    // Final fallback: just try the last resize control
+                    if (!resizerHandle && allResizeControls.length > 0) {
+                      resizerHandle = allResizeControls[allResizeControls.length - 1];
                     }
                   }
                   
-                  // Final fallback: just try the last resize control
-                  if (!resizerHandle && allResizeControls.length > 0) {
-                    resizerHandle = allResizeControls[allResizeControls.length - 1];
+                  if (resizerHandle && resizerHandle instanceof HTMLElement) {
+                    // Create and dispatch a mousedown event to the original resizer
+                    const mouseEvent = new MouseEvent('mousedown', {
+                      bubbles: true,
+                      cancelable: true,
+                      clientX,
+                      clientY,
+                      button: 0,  // Left button
+                      view: window
+                    });
+                    
+                    resizerHandle.dispatchEvent(mouseEvent);
+                    logger.info('Successfully triggered resize handle for loop node:', { id });
+                  } else {
+                    // If we can't find the resize handle, implement manual resize as fallback
+                    logger.warn('Could not find ReactFlow resize handle, using fallback resize:', { id });
+                    
+                    // Get the current node dimensions
+                    const currentWidth = data.width || 800;
+                    const currentHeight = data.height || 1000;
+                    const minWidth = 800;
+                    const minHeight = 1000;
+                    
+                    // Setup manual resize
+                    let isDragging = true;
+                    
+                    const onMouseMove = (moveEvent: MouseEvent) => {
+                      if (!isDragging) return;
+                      
+                      // Calculate new dimensions based on mouse movement
+                      const deltaX = moveEvent.clientX - startX;
+                      const deltaY = moveEvent.clientY - startY;
+                      
+                      const newWidth = Math.max(minWidth, currentWidth + deltaX);
+                      const newHeight = Math.max(minHeight, currentHeight + deltaY);
+                      
+                      // Update node dimensions
+                      handleResize(null, { width: newWidth, height: newHeight });
+                    };
+                    
+                    const onMouseUp = () => {
+                      isDragging = false;
+                      document.removeEventListener('mousemove', onMouseMove);
+                      document.removeEventListener('mouseup', onMouseUp);
+                    };
+                    
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
                   }
+                } catch (error) {
+                  logger.error('Error trying to activate resize handle:', { error, id });
                 }
-                
-                if (resizerHandle && resizerHandle instanceof HTMLElement) {
-                  // Create and dispatch a mousedown event to the original resizer
-                  const mouseEvent = new MouseEvent('mousedown', {
-                    bubbles: true,
-                    cancelable: true,
-                    clientX,
-                    clientY,
-                    button: 0,  // Left button
-                    view: window
-                  });
-                  
-                  resizerHandle.dispatchEvent(mouseEvent);
-                  logger.info('Successfully triggered resize handle for loop node:', { id });
-                } else {
-                  // If we can't find the resize handle, implement manual resize as fallback
-                  logger.warn('Could not find ReactFlow resize handle, using fallback resize:', { id });
-                  
-                  // Get the current node dimensions
-                  const currentWidth = data.width || 800;
-                  const currentHeight = data.height || 1000;
-                  const minWidth = 800;
-                  const minHeight = 1000;
-                  
-                  // Setup manual resize
-                  let isDragging = true;
-                  
-                  const onMouseMove = (moveEvent: MouseEvent) => {
-                    if (!isDragging) return;
-                    
-                    // Calculate new dimensions based on mouse movement
-                    const deltaX = moveEvent.clientX - startX;
-                    const deltaY = moveEvent.clientY - startY;
-                    
-                    const newWidth = Math.max(minWidth, currentWidth + deltaX);
-                    const newHeight = Math.max(minHeight, currentHeight + deltaY);
-                    
-                    // Update node dimensions
-                    handleResize(null, { width: newWidth, height: newHeight });
-                  };
-                  
-                  const onMouseUp = () => {
-                    isDragging = false;
-                    document.removeEventListener('mousemove', onMouseMove);
-                    document.removeEventListener('mouseup', onMouseUp);
-                  };
-                  
-                  document.addEventListener('mousemove', onMouseMove);
-                  document.addEventListener('mouseup', onMouseUp);
-                }
-              } catch (error) {
-                logger.error('Error trying to activate resize handle:', { error, id });
-              }
-            }, 50); // Short delay to ensure DOM is ready
-          }}
-        >
-          {/* Subtle diagonal lines indicating resize handle */}
-          <svg 
-            width="14" 
-            height="14" 
-            viewBox="0 0 14 14" 
-            fill="none" 
-            xmlns="http://www.w3.org/2000/svg"
-            className="opacity-40 group-hover:opacity-100 transition-opacity absolute right-1 bottom-1"
+              }, 50); // Short delay to ensure DOM is ready
+            }}
           >
-            <path d="M13 13L8 8M13 3L3 13" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round"/>
-          </svg>
-        </div>
+            {/* Subtle diagonal lines indicating resize handle */}
+            <svg 
+              width="14" 
+              height="14" 
+              viewBox="0 0 14 14" 
+              fill="none" 
+              xmlns="http://www.w3.org/2000/svg"
+              className="opacity-40 group-hover:opacity-100 transition-opacity absolute right-1 bottom-1"
+            >
+              <path d="M13 13L8 8M13 3L3 13" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
 
-        {/* Input handle on left middle */}
-        <Handle
-          type="target"
-          position={Position.Left}
-          className="!bg-gray-400 !w-3 !h-3"
-          style={{ 
-            left: "-6px", 
-            top: "50%",
-            transform: "translateY(-50%)" 
-          }}
-        />
-          
-        {/* Output handle on right middle */}
-        <Handle
-          type="source"
-          position={Position.Right}
-          className="!bg-gray-400 !w-3 !h-3"
-          style={{ 
-            right: "-6px", 
-            top: "50%",
-            transform: "translateY(-50%)" 
-          }}
-          id="loop-end-source"
-        />
+          {/* Input handle on left middle */}
+          <Handle
+            type="target"
+            position={Position.Left}
+            className="!bg-gray-400 !w-3 !h-3"
+            style={{ 
+              left: "-6px", 
+              top: "50%",
+              transform: "translateY(-50%)" 
+            }}
+          />
+            
+          {/* Output handle on right middle */}
+          <Handle
+            type="source"
+            position={Position.Right}
+            className="!bg-gray-400 !w-3 !h-3"
+            style={{ 
+              right: "-6px", 
+              top: "50%",
+              transform: "translateY(-50%)" 
+            }}
+            id="loop-end-source"
+          />
+        </div>
       </div>
+      
+      {/* Loop Action Bar - positioned outside the node */}
+      <LoopActionBar nodeId={id} data={data} />
     </div>
   )
 })

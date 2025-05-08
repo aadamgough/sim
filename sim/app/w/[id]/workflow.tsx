@@ -34,20 +34,24 @@ import { LoopNodeComponent } from '@/app/w/[id]/components/loop-node/loop-node'
 
 const logger = createLogger('Workflow')
 
-// Define custom node and edge types
-const nodeTypes: NodeTypes = {
+// Define custom node and edge types outside the component
+const defaultNodeTypes = {
   workflowBlock: WorkflowBlock,
   group: LoopNodeComponent,
   loop: LoopNodeComponent,
 }
 
-const edgeTypes: EdgeTypes = { workflowEdge: WorkflowEdge }
+const defaultEdgeTypes = { workflowEdge: WorkflowEdge }
 
 function WorkflowContent() {
   // State
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
   const { isCollapsed: isSidebarCollapsed } = useSidebarStore()
+
+  // Memoize node and edge types to prevent re-creation on each render
+  const nodeTypes = useMemo<NodeTypes>(() => defaultNodeTypes, []);
+  const edgeTypes = useMemo<EdgeTypes>(() => defaultEdgeTypes, []);
 
   // Hooks
   const params = useParams()
@@ -279,16 +283,23 @@ function WorkflowContent() {
 
       // Calculate position relative to parent if it exists
       let position = { ...block.position }; // Clone to avoid mutations
+      let parentId = block.data?.parentId;
+      let includeParentInfo = false;
 
       // If this block belongs to a loop node, calculate its position relative to the parent
-      if (block.data?.parentId) {
-        const parentBlock = blocks[block.data.parentId]
+      if (parentId) {
+        const parentBlock = blocks[parentId];
         if (parentBlock) {
           // For child nodes, we want to render them at positions relative to the parent
           position = {
             x: block.position.x - parentBlock.position.x,
             y: block.position.y - parentBlock.position.y,
-          }
+          };
+          includeParentInfo = true;
+        } else {
+          // Parent doesn't exist - log warning and detach from parent
+          logger.warn(`Parent node ${parentId} not found for block ${blockId}, detaching from parent`);
+          parentId = undefined;
         }
       }
 
@@ -297,9 +308,9 @@ function WorkflowContent() {
         id: block.id,
         type: 'workflowBlock',
         position,
-        // Set parentId directly on the node if it exists
-        ...(block.data?.parentId && {
-          parentId: block.data.parentId,
+        // Set parentId directly on the node if it exists and is valid
+        ...(includeParentInfo && {
+          parentId,
           extent: 'parent',
           draggable: true // Make sure child nodes are draggable
         }),
@@ -309,7 +320,12 @@ function WorkflowContent() {
           config: blockConfig,
           name: block.name,
           isActive,
-          isPending
+          isPending,
+          // Remove parentId reference if parent is missing
+          ...(block.data && {
+            ...block.data,
+            ...(includeParentInfo ? {} : { parentId: undefined })
+          })
         },
       }
 
@@ -488,13 +504,45 @@ function WorkflowContent() {
     (changes: any) => {
       changes.forEach((change: any) => {
         if (change.type === 'position' && change.position) {
-          const node = reactFlowInstance.getNode(change.id)
-          if (!node) return
+          const node = reactFlowInstance.getNode(change.id);
+          if (!node) return;
 
           // If this is a child node being dragged inside a parent
           if (node.parentId) {
-            const parentNode = reactFlowInstance.getNode(node.parentId)
-            if (!parentNode) return;
+            const parentNode = reactFlowInstance.getNode(node.parentId);
+            
+            // Check if parent node exists
+            if (!parentNode) {
+              logger.warn(`Parent node ${node.parentId} not found for node ${node.id} during position update`);
+              
+              // Update position without parent constraints
+              updateBlockPosition(change.id, change.position);
+              
+              // Detach from parent in store
+              setTimeout(() => {
+                // Use setTimeout to avoid state mutation during render
+                useWorkflowStore.setState(state => {
+                  const updatedBlock = state.blocks[change.id];
+                  if (updatedBlock && updatedBlock.data) {
+                    return {
+                      ...state,
+                      blocks: {
+                        ...state.blocks,
+                        [change.id]: {
+                          ...updatedBlock,
+                          data: {
+                            ...updatedBlock.data,
+                            parentId: undefined
+                          }
+                        }
+                      }
+                    };
+                  }
+                  return state;
+                });
+              }, 0);
+              return;
+            }
             
             // Get parent dimensions from style or fallback to defaults
             const parentStyle = parentNode.style || {};
@@ -502,15 +550,22 @@ function WorkflowContent() {
             const parentHeight = (parentStyle.height as number) || 1000;
             
             // Child node approximate dimensions
-            const childWidth = 320
-            const childHeight = 180
+            const childWidth = 320;
+            const childHeight = 180;
             
             // Constrain position to stay within parent bounds
             // Allow some margin from the edges (20px)
             const constrainedPosition = {
-              x: Math.max(20, Math.min(change.position.x, parentWidth - childWidth - 20)),
-              y: Math.max(20, Math.min(change.position.y, parentHeight - childHeight - 20))
+              x: Math.max(20, Math.min(change.position.x, parentWidth - childWidth+ 170)),
+              y: Math.max(20, Math.min(change.position.y, parentHeight - childHeight))
             };
+            
+            // Check if parent exists in the block store
+            if (!blocks[node.parentId]) {
+              logger.warn(`Parent block ${node.parentId} missing in store for node ${node.id}`);
+              updateBlockPosition(change.id, change.position);
+              return;
+            }
             
             // Calculate the absolute position based on the parent position and relative position
             const absolutePosition = {

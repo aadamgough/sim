@@ -83,6 +83,7 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
   // Handle delete
   const handleDelete = useCallback(() => {
     removeBlock(nodeId)
+    
   }, [nodeId, removeBlock])
   
   // Handle duplicate (not implemented yet)
@@ -94,7 +95,7 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
   return (
     <div
       className={cn(
-        'absolute -right-[142px] top-0',
+        'absolute -right-[205px] top-0',
         'flex flex-col items-start gap-3 p-3',
         'bg-background rounded-md shadow-sm border border-gray-200 dark:border-gray-800',
         'opacity-0 group-hover:opacity-100 transition-opacity duration-200',
