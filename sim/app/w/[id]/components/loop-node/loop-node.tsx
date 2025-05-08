@@ -693,12 +693,13 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
             position: 'relative',
             boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
             overflow: 'visible', // Allow children to overflow
-            transition: 'border-color 0.2s, background-color 0.2s, box-shadow 0.2s',
+            transition: 'all 0.2s ease-in-out',
           }}
           className={cn(
             'transition-all duration-200 group-node',
             data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
-            isHovered && 'hover-highlight'
+            isHovered && 'hover-highlight',
+            isValidDragOver && 'drag-highlight'
           )}
           onDrop={handleDrop}
           onDragOver={(e) => {

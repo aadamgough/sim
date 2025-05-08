@@ -20,7 +20,8 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
   const [isEditingIterations, setIsEditingIterations] = useState(false)
   
   // Get store methods
-  const { updateNodeDimensions, removeBlock } = useWorkflowStore()
+  const removeBlock = useWorkflowStore((state) => state.removeBlock)
+  const duplicateBlock = useWorkflowStore((state) => state.duplicateBlock)
   
   // Update state from props when they change
   useEffect(() => {
@@ -71,13 +72,22 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
     const value = parseInt(e.target.value)
     if (!isNaN(value) && value > 0 && value <= 100) {
       setIterations(value)
+      updateLoopConfig(undefined, value)
     }
-  }, [])
+  }, [updateLoopConfig])
   
   // Handle iterations input blur (save changes)
   const handleIterationsBlur = useCallback(() => {
     setIsEditingIterations(false)
-    updateLoopConfig(undefined, iterations)
+  }, [])
+
+  // Handle increment/decrement
+  const handleIterationAdjust = useCallback((delta: number) => {
+    const newValue = iterations + delta
+    if (newValue > 0 && newValue <= 100) {
+      setIterations(newValue)
+      updateLoopConfig(undefined, newValue)
+    }
   }, [iterations, updateLoopConfig])
   
   // Handle delete
@@ -86,16 +96,11 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
     
   }, [nodeId, removeBlock])
   
-  // Handle duplicate (not implemented yet)
-  const handleDuplicate = useCallback(() => {
-    // Placeholder for future implementation
-    logger.info('Duplicate not implemented for loop nodes yet')
-  }, [])
 
   return (
     <div
       className={cn(
-        'absolute -right-[205px] top-0',
+        'absolute -right-[210px] top-0',
         'flex flex-col items-start gap-3 p-3',
         'bg-background rounded-md shadow-sm border border-gray-200 dark:border-gray-800',
         'opacity-0 group-hover:opacity-100 transition-opacity duration-200',
@@ -153,25 +158,36 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
               value={iterations}
               min="1"
               max="100"
-              className="w-full h-7 px-2 text-xs rounded border-input bg-transparent"
+              className="w-full h-7 px-2 text-xs rounded border border-input bg-transparent"
               onChange={handleIterationsChange}
               onBlur={handleIterationsBlur}
-              onKeyDown={(e) => e.key === 'Enter' && handleIterationsBlur()}
               autoFocus
             />
           ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs h-7 w-full justify-between font-normal"
-              onClick={() => setIsEditingIterations(true)}
-            >
-              <div className="flex items-center">
+            <div className="flex items-center w-full gap-1">
+              <div
+                className="flex-1 flex items-center h-7 px-2 text-xs rounded border border-input hover:bg-accent hover:text-accent-foreground cursor-pointer"
+              >
                 <IterationCw className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
                 <span>{iterations} iterations</span>
               </div>
-              <ChevronDown className="h-3 w-3 text-muted-foreground" />
-            </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => handleIterationAdjust(-1)}
+              >
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => handleIterationAdjust(1)}
+              >
+                <ChevronDown className="h-3 w-3 rotate-180" />
+              </Button>
+            </div>
           )}
         </div>
       )}
@@ -196,7 +212,7 @@ export function LoopActionBar({ nodeId, data }: LoopActionBarProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={handleDuplicate}
+              onClick={() => duplicateBlock(nodeId)}
               className="text-gray-500"
             >
               <Copy className="h-3.5 w-3.5" />
