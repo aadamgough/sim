@@ -4,18 +4,209 @@ import { RepeatIcon, X, PlayCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
+import { getBlock } from '@/blocks'
+import { useGeneralStore } from '@/stores/settings/general/store'
 
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
-  const { deleteElements, getNode, getNodes, setNodes } = useReactFlow()
+  const { deleteElements, getNode, getNodes, setNodes, screenToFlowPosition } = useReactFlow()
   const {
     removeBlock,
-    updateNodeDimensions
+    updateNodeDimensions,
+    addBlock,
+    blocks,
+    addEdge,
+    updateBlockPosition
   } = useWorkflowStore()
   
   // State to track if a valid block is being dragged over
   const [isValidDragOver, setIsValidDragOver] = useState(false)
+  
+  // Handle drops directly on the loop node
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    logger.info('Drop detected within loop node:', { id, target: (e.target as HTMLElement).className })
+    
+    try {
+      // Get the loop node
+      const loopNode = getNode(id)
+      if (!loopNode) {
+        logger.error('Could not find loop node')
+        return
+      }
+
+      // Get the drop position in flow coordinates
+      const dropPosition = screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY
+      })
+      
+      logger.info('Drop position in flow coordinates:', { dropPosition })
+
+      // Calculate position relative to the loop node's position in flow coordinates
+      const relativePosition = {
+        x: dropPosition.x - loopNode.position.x,
+        y: dropPosition.y - loopNode.position.y
+      }
+
+      logger.info('Relative position within loop node:', { relativePosition })
+
+      // Get the block data from the drag event
+      const rawData = e.dataTransfer.getData('application/json')
+      if (!rawData) {
+        logger.error('No data found in drop event')
+        return
+      }
+      
+      const data = JSON.parse(rawData)
+      const type = data.type || (data.data && data.data.type)
+      
+      if (!type || type === 'connectionBlock' || type === 'starter' || type === 'loop') {
+        logger.info('Ignoring drop for unsupported block type:', { type })
+        return
+      }
+
+      // Check if this is an existing block being moved
+      const existingBlockId = data.id
+      let targetBlockId: string | undefined = existingBlockId
+
+      if (existingBlockId && blocks[existingBlockId]) {
+        // Check if the block is already in a different loop
+        const existingParentId = blocks[existingBlockId].data?.parentId
+        if (existingParentId && existingParentId !== id) {
+          logger.info('Block already belongs to another parent:', { 
+            blockId: existingBlockId,
+            currentParent: existingParentId,
+            targetParent: id
+          })
+          
+          // If we decide to allow moving between parents, we'd need to first remove
+          // it from the original parent before adding to the new one
+          // For now, let's avoid this complexity
+          return
+        }
+        
+        logger.info('Updating existing block:', { blockId: existingBlockId })
+        
+        // When moving an existing block into a loop, update its position and parent relationship
+        const updatedBlock = {
+          ...blocks[existingBlockId],
+          position: relativePosition,
+          data: {
+            ...blocks[existingBlockId].data,
+            parentId: id,
+            extent: 'parent'
+          }
+        }
+        
+        // Update the store
+        useWorkflowStore.setState(state => ({
+          blocks: {
+            ...state.blocks,
+            [existingBlockId]: updatedBlock
+          }
+        }))
+        
+        // Update React Flow nodes
+        setNodes((nds) =>
+          nds.map((node) =>
+            node.id === existingBlockId
+              ? {
+                  ...node,
+                  position: relativePosition,
+                  parentId: id,
+                  extent: 'parent',
+                }
+              : node
+          )
+        )
+      } else {
+        // Create a new block
+        targetBlockId = crypto.randomUUID()
+        const blockConfig = getBlock(type)
+        if (!blockConfig) {
+          logger.error('Invalid block type:', { type })
+          return
+        }
+        
+        const name = `${blockConfig.name} ${
+          Object.values(blocks).filter((b) => b.type === type).length + 1
+        }`
+        
+        // Add the new block with proper parent relationship parameters
+        addBlock(
+          targetBlockId,
+          type,
+          name,
+          relativePosition,
+          {}, // Pass an empty data object
+          id, // Pass parentId as a separate parameter
+          'parent' // Pass extent as a separate parameter
+        )
+
+        logger.info('Added new block with parent relationship:', { 
+          blockId: targetBlockId, 
+          parentId: id,
+          position: relativePosition 
+        })
+      }
+
+      // Auto-connect if enabled
+      const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
+      if (isAutoConnectEnabled && targetBlockId) {
+        // Find the loop's start node or closest block within the loop
+        const loopStartBlocks = getNodes().filter(
+          node => node.parentId === id && node.data?.isLoopStart
+        )
+        
+        if (loopStartBlocks.length > 0) {
+          // Connect from loop start block
+          const sourceBlock = loopStartBlocks[0]
+          addEdge({
+            id: crypto.randomUUID(),
+            source: sourceBlock.id,
+            target: targetBlockId,
+            sourceHandle: 'loop-start-source',
+            targetHandle: 'target',
+            type: 'workflowEdge',
+          })
+        } else {
+          // Look for closest block within the loop
+          const loopBlocks = getNodes()
+            .filter(node => node.parentId === id && node.id !== targetBlockId)
+            .map(node => ({
+              id: node.id,
+              position: node.position,
+              distance: Math.sqrt(
+                Math.pow(node.position.x - relativePosition.x, 2) +
+                Math.pow(node.position.y - relativePosition.y, 2)
+              ),
+            }))
+            .sort((a, b) => a.distance - b.distance)
+          
+          if (loopBlocks.length > 0) {
+            // Connect from closest block
+            const closestBlock = loopBlocks[0]
+            addEdge({
+              id: crypto.randomUUID(),
+              source: closestBlock.id,
+              target: targetBlockId,
+              sourceHandle: 'source',
+              targetHandle: 'target',
+              type: 'workflowEdge',
+            })
+          }
+        }
+      }
+    } catch (err) {
+      logger.error('Error handling drop on loop node:', { err })
+    } finally {
+      setIsValidDragOver(false)
+    }
+  }, [id, screenToFlowPosition, addEdge, getNodes, setNodes, blocks, addBlock])
   
   // Set up drag event handlers
   useEffect(() => {
@@ -27,6 +218,21 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       
       try {
         const dragEvent = e as DragEvent
+        
+        // Check if we're dragging an existing node
+        const target = dragEvent.target as HTMLElement
+        const existingNodeElement = target.closest('.react-flow__node-workflowBlock')
+        if (existingNodeElement) {
+          const nodeId = existingNodeElement.getAttribute('data-id')
+          if (nodeId && nodeId !== id) {
+            // This is an existing node being dragged over the loop
+            logger.info('Existing node dragged over loop:', { nodeId, loopId: id })
+            setIsValidDragOver(true)
+            return
+          }
+        }
+        
+        // Check for new nodes from toolbar
         if (dragEvent.dataTransfer?.getData) {
           try {
             const rawData = dragEvent.dataTransfer.getData('application/json')
@@ -34,7 +240,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
               const data = JSON.parse(rawData)
               // Check if it's not a starter block
               const type = data.type || (data.data && data.data.type)
-              if (type && type !== 'starter') {
+              if (type && type !== 'starter' && type !== 'loop') {
+                logger.info('Toolbar item dragged over loop:', { type })
                 setIsValidDragOver(true)
                 return
               }
@@ -45,6 +252,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         }
         setIsValidDragOver(false)
       } catch (err) {
+        logger.error('Error in drag over:', { err })
         setIsValidDragOver(false)
       }
     }
@@ -53,27 +261,23 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       setIsValidDragOver(false)
     }
     
-    const handleDrop = () => {
-      setIsValidDragOver(false)
-    }
-    
     nodeElement.addEventListener('dragover', handleDragOver as EventListener)
     nodeElement.addEventListener('dragleave', handleDragLeave)
-    nodeElement.addEventListener('drop', handleDrop)
+    nodeElement.addEventListener('drop', handleDrop as unknown as EventListener)
     
     return () => {
       nodeElement.removeEventListener('dragover', handleDragOver as EventListener)
       nodeElement.removeEventListener('dragleave', handleDragLeave)
-      nodeElement.removeEventListener('drop', handleDrop)
+      nodeElement.removeEventListener('drop', handleDrop as unknown as EventListener)
     }
-  }, [id])
+  }, [id, handleDrop])
   
   const handleResize = useCallback((evt: any, { width, height }: { width: number; height: number }) => {
     logger.info('Loop node resized:', { id, width, height })
     
     // Always ensure minimum dimensions
     const minWidth = 800
-    const minHeight = 600
+    const minHeight = 1000
     
     const finalWidth = Math.max(width, minWidth)
     const finalHeight = Math.max(height, minHeight)
@@ -115,19 +319,33 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   }, [id, updateNodeDimensions, getNodes, setNodes])
 
   const onDelete = () => {
-    // Delete this loop node
-    const node = getNode(id)
+    // Find all child nodes to delete them as well
+    const childNodeIds = getNodes()
+      .filter(node => node.parentId === id)
+      .map(node => node.id);
+    
+    logger.info('Deleting loop node and children:', { loopId: id, childCount: childNodeIds.length });
+    
+    // Delete the loop node (will trigger workflow store's removeBlock)
+    const node = getNode(id);
     if (node) {
-      deleteElements({ nodes: [node] })
-      removeBlock(id)
+      deleteElements({ nodes: [node] });
+      
+      // Use the workflow store's removeBlock which handles cleanup properly
+      removeBlock(id);
+      
+      // Delete any child nodes that might not be automatically cleaned up
+      childNodeIds.forEach(childId => {
+        removeBlock(childId);
+      });
     }
-  }
+  };
 
   return (
     <div className="relative">
       <NodeResizer 
         minWidth={800} 
-        minHeight={600}
+        minHeight={1000}
         isVisible={selected}
         lineClassName="border-primary"
         handleClassName="h-3 w-3 bg-primary border-primary"
@@ -137,19 +355,19 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       <div 
         style={{
           width: data.width || 800,
-          height: data.height || 600,
-          border: isValidDragOver ? '2px solid #40E0D0' : '2px dashed #94a3b8',
+          height: data.height || 1000,
+          border: isValidDragOver ? '2px solid #40E0D0' : selected ? '2px solid #94a3b8' : '2px dashed #94a3b8',
           backgroundColor: isValidDragOver ? 'rgba(34,197,94,0.05)' : 'transparent',
           borderRadius: '8px',
           position: 'relative',
           boxShadow: 'none',
-          outline: 'none !important',
+          overflow: 'visible', // Allow children to overflow
         }}
         className={cn(
           'transition-all duration-200',
-          selected && '!ring-0 !border-none !outline-none !shadow-none',
           data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]'
         )}
+        onDrop={handleDrop}
       >
         {/* Simple header with icon and label */}
         <div className="flex items-center px-3 py-2 bg-background rounded-t-lg workflow-drag-handle cursor-move border-b border-dashed border-gray-300">
@@ -169,7 +387,15 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         </div>
         
         {/* Child nodes container */}
-        <div className="p-4 h-[calc(100%-40px)]" data-dragarea="true">
+        <div 
+          className="p-4 h-[calc(100%-40px)]" 
+          data-dragarea="true"
+          style={{
+            position: 'relative',
+            minHeight: '100%',
+            transform: 'none', // Ensure no transforms affect child positioning
+          }}
+        >
           {/* Loop Start Block - positioned at left middle */}
           <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
             <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative">

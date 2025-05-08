@@ -14,13 +14,13 @@ export const LoopTool = {
     count: 5,
     collection: '',
     width: 800,
-    height: 600,
+    height: 1000,
   },
   style: {
     width: 800,
-    height: 600,
+    height: 1000,
   },
   dragHandle: '.workflow-drag-handle',
-  // Ensure React Flow knows to render this as a group
+  // Specify that this should be rendered as a ReactFlow group node
   reactFlowType: 'group'
 } 

@@ -48,11 +48,17 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         set({ needsRedeployment })
       },
 
-      addBlock: (id: string, type: string, name: string, position: Position, data?: Record<string, any>) => {
+      addBlock: (id: string, type: string, name: string, position: Position, data?: Record<string, any>, parentId?: string, extent?: 'parent') => {
         const blockConfig = getBlock(type)
         
         // For custom nodes like loop that don't use BlockConfig
         if (!blockConfig && type === 'loop') {
+          // Merge parentId and extent into data if provided
+          const nodeData = {
+            ...data,
+            ...(parentId && { parentId, extent: extent || 'parent' })
+          }
+          
           const newState = {
             blocks: {
               ...get().blocks,
@@ -67,7 +73,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
                 horizontalHandles: true,
                 isWide: false,
                 height: 0,
-                data
+                data: nodeData
               },
             },
             edges: [...get().edges],
@@ -82,6 +88,12 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         }
 
         if (!blockConfig) return
+
+        // Merge parentId and extent into data for regular blocks
+        const nodeData = {
+          ...data,
+          ...(parentId && { parentId, extent: extent || 'parent' })
+        }
 
         const subBlocks: Record<string, SubBlockState> = {}
         blockConfig.subBlocks.forEach((subBlock) => {
@@ -109,6 +121,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
               horizontalHandles: true,
               isWide: false,
               height: 0,
+              data: nodeData,
             },
           },
           edges: [...get().edges],

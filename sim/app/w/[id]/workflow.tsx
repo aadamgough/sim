@@ -150,10 +150,10 @@ function WorkflowContent() {
         const id = crypto.randomUUID()
         const name = `Loop ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
 
-        // Add the loop block to the workflow
+        // Add the loop block to the workflow with proper configuration
         addBlock(id, type, name, centerPosition, {
           width: 800,
-          height: 600,
+          height: 1000,
           loopType: 'for',
           count: 5,
           collection: '',
@@ -227,7 +227,7 @@ function WorkflowContent() {
   // Transform blocks and loops into ReactFlow nodes
   const nodes = useMemo(() => {
     const nodeArray: any[] = []
-    logger.info('Creating nodes from blocks:', { blockCount: Object.keys(blocks).length })
+    // logger.info('Creating nodes from blocks:', { blockCount: Object.keys(blocks).length })
 
     // Add block nodes
     Object.entries(blocks).forEach(([blockId, block]) => {
@@ -238,7 +238,7 @@ function WorkflowContent() {
 
       // Handle loop nodes
       if (block.type === 'loop') {
-        logger.info('Creating loop node in useMemo:', { id: block.id, data: block.data })
+        // logger.info('Creating loop node in useMemo:', { id: block.id, data: block.data })
         nodeArray.push({
           id: block.id,
           type: 'group',
@@ -246,7 +246,7 @@ function WorkflowContent() {
           dragHandle: '.workflow-drag-handle',
           style: {
             width: block.data?.width || 800,
-            height: block.data?.height || 600,
+            height: block.data?.height || 1000,
             backgroundColor: 'transparent',
             border: 'none',
             boxShadow: 'none',
@@ -259,7 +259,7 @@ function WorkflowContent() {
             count: block.data?.count || 5,
             collection: block.data?.collection || '',
             width: block.data?.width || 800,
-            height: block.data?.height || 600,
+            height: block.data?.height || 1000,
           },
         })
         return
@@ -288,24 +288,29 @@ function WorkflowContent() {
         }
       }
 
-      nodeArray.push({
+      // Create the node with proper parent-child relationship properties
+      const node = {
         id: block.id,
         type: 'workflowBlock',
         position,
-        parentId: block.data?.parentId,
+        // Set parentId directly on the node if it exists
+        ...(block.data?.parentId && {
+          parentId: block.data.parentId,
+          extent: 'parent'
+        }),
         dragHandle: '.workflow-drag-handle',
         data: {
           type: block.type,
           config: blockConfig,
           name: block.name,
           isActive,
-          isPending,
-          parentId: block.data?.parentId,
+          isPending
         },
-      })
+      }
+
+      nodeArray.push(node)
     })
 
-    logger.info('Final node array:', { nodeCount: nodeArray.length })
     return nodeArray
   }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled])
 
@@ -314,6 +319,13 @@ function WorkflowContent() {
     (event: React.DragEvent) => {
       event.preventDefault()
 
+      // If the drop target is a loop node, let the loop node handle it
+      const loopNodeElement = (event.target as HTMLElement).closest('.react-flow__node-group')
+      if (loopNodeElement) {
+        logger.info('Drop targeted at loop node, letting loop node handle it')
+        return
+      }
+
       try {
         const rawData = event.dataTransfer.getData('application/json')
         logger.info('Drop event raw data:', rawData)
@@ -321,7 +333,6 @@ function WorkflowContent() {
         const data = JSON.parse(rawData)
         logger.info('Parsed drop data:', data)
         
-        // Handle nested data structure (might be getting the entire LoopTool object)
         const type = data.type || (data.data && data.data.type)
         
         if (!type) {
@@ -339,54 +350,6 @@ function WorkflowContent() {
           x: event.clientX - reactFlowBounds.left,
           y: event.clientY - reactFlowBounds.top,
         })
-        logger.info('Drop position:', { position, clientX: event.clientX, clientY: event.clientY })
-
-        // Check if drop is inside a loop node
-        const loopNodes = nodes.filter(node => node.type === 'group')
-        logger.info('Found loop nodes:', { count: loopNodes.length, loopNodes })
-        
-        const dropPoint = { x: event.clientX, y: event.clientY }
-        logger.info('Drop point:', dropPoint)
-        
-        let parentLoopNode = null
-        for (const loopNode of loopNodes) {
-          //use reactFlowInstance to get the node
-          const loopElement = reactFlowInstance.getNode(loopNode.id)
-          if (loopElement) {
-            // Instead of getBoundingClientRect, use the node's position and dimensions
-            const { position, data } = loopElement
-            const width = data?.width || 800
-            const height = data?.height || 600
-            const rect = {
-              left: position.x,
-              top: position.y,
-              right: position.x + width,
-              bottom: position.y + height,
-              width,
-              height,
-            }
-            logger.info('Checking loop node bounds:', { 
-              id: loopNode.id, 
-              rect,
-              isInside: (
-                position.x <= position.x &&
-                position.x + width >= position.x &&
-                position.y <= position.y &&
-                position.y + height >= position.y
-              )
-            })
-            if (
-              position.x <= position.x &&
-              position.x + width >= position.x &&
-              position.y <= position.y &&
-              position.y + height >= position.y
-            ) {
-              parentLoopNode = loopNode
-              logger.info('Found parent loop node:', { id: loopNode.id })
-              break
-            }
-          }
-        }
 
         // Special handling for loop nodes
         if (type === 'loop') {
@@ -394,15 +357,16 @@ function WorkflowContent() {
           const id = crypto.randomUUID()
           const name = `Loop ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
 
-          // Add the loop block to the workflow with correct data
+          // Add the loop with proper configuration to ensure it renders as a group node
           addBlock(id, type, name, position, {
             width: 800,
-            height: 600,
+            height: 1000,
             loopType: 'for',
             count: 5,
             collection: '',
           })
-          logger.info('Added new loop node:', { id, name, position })
+
+          logger.info("Loop block created at position:", position)
 
           // Auto-connect logic
           const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
@@ -418,7 +382,6 @@ function WorkflowContent() {
                 targetHandle: 'target',
                 type: 'workflowEdge',
               })
-              logger.info('Auto-connected loop node:', { source: closestBlock.id, target: id })
             }
           }
           return
@@ -427,7 +390,7 @@ function WorkflowContent() {
         // Regular block handling
         const blockConfig = getBlock(type)
         if (!blockConfig) {
-          logger.error('Invalid block type:', { type, data })
+          logger.error('Invalid block type:', { type })
           return
         }
 
@@ -436,13 +399,8 @@ function WorkflowContent() {
           Object.values(blocks).filter((b) => b.type === type).length + 1
         }`
 
-        // Add block with parent ID if dropped inside a loop
-        const blockData = {
-          parentId: parentLoopNode
-        }
-        logger.info('Adding new block:', { id, type, name, position, blockData })
-        
-        addBlock(id, type, name, position, blockData)
+        logger.info('Adding new block:', { id, type, name, position })
+        addBlock(id, type, name, position)
 
         // Auto-connect logic
         const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
@@ -458,7 +416,6 @@ function WorkflowContent() {
               targetHandle: 'target',
               type: 'workflowEdge',
             })
-            logger.info('Auto-connected block:', { source: closestBlock.id, target: id })
           }
         }
       } catch (err) {
@@ -502,7 +459,7 @@ function WorkflowContent() {
     }
   }, [])
 
-  // Update the onNodesChange handler
+  // Update the onNodesChange handler to properly handle parent-child relationships
   const onNodesChange = useCallback(
     (changes: any) => {
       changes.forEach((change: any) => {
@@ -530,13 +487,32 @@ function WorkflowContent() {
   )
 
   // Update the onDragEnd handler
-  const onDragEnd = useCallback(() => {
+  const onDragEnd = useCallback((event: any) => {
     // Remove highlighting from all loop nodes
     const highlightedNodes = document.querySelectorAll('.react-flow__node-group.dragging-over')
     logger.info('Removing drag highlight from nodes:', { count: highlightedNodes.length })
     highlightedNodes.forEach(node => {
       node.classList.remove('dragging-over')
     })
+    
+    // If a node was dragged onto a loop node, this would be handled by the loop node's drop handler
+    if (event?.target) {
+      const loopNode = event.target.closest('.react-flow__node-group')
+      if (loopNode) {
+        const draggedNodeId = event.target.getAttribute('data-id')
+        const loopNodeId = loopNode.getAttribute('data-id')
+        
+        if (draggedNodeId && loopNodeId) {
+          logger.info('Node dragged onto loop:', { 
+            draggedNodeId, 
+            loopNodeId
+          })
+          
+          // The drop handling will be done by the loop node component
+          // This is just for logging
+        }
+      }
+    }
   }, [])
 
   // Init workflow
