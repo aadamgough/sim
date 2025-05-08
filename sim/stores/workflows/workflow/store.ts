@@ -135,18 +135,99 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
       },
 
       updateBlockPosition: (id: string, position: Position) => {
-        set((state) => ({
+        const block = get().blocks[id];
+        if (!block) return;
+        
+        // Skip update if the position hasn't changed significantly
+        // This prevents unnecessary renders and potential jumping
+        const currentPosition = block.position;
+        const positionChanged = 
+          Math.abs(currentPosition.x - position.x) > 0.1 || 
+          Math.abs(currentPosition.y - position.y) > 0.1;
+          
+        if (!positionChanged) return;
+        
+        // Calculate deltas for child updates
+        const deltaX = position.x - currentPosition.x;
+        const deltaY = position.y - currentPosition.y;
+        
+        // Check if this block is a parent (loop node) and has children that need to be updated
+        const isLoopNode = block.type === 'loop';
+        const hasParent = block.data?.parentId !== undefined;
+        
+        // Get the new state with the updated block position
+        const newState = {
           blocks: {
-            ...state.blocks,
+            ...get().blocks,
             [id]: {
-              ...state.blocks[id],
+              ...block,
               position,
             },
           },
-          edges: [...state.edges],
-        }))
-        get().updateLastSaved()
-
+          edges: [...get().edges],
+        };
+        
+        // If this is a child node, ensure it stays within the parent bounds
+        if (hasParent && block.data) {
+          const parentId = block.data.parentId;
+          const parentBlock = get().blocks[parentId];
+          
+          if (parentBlock) {
+            // Calculate the relative position of the child within the parent
+            const relativeX = position.x - parentBlock.position.x;
+            const relativeY = position.y - parentBlock.position.y;
+            
+            // Get parent dimensions
+            const parentWidth = parentBlock.data?.width || 800;
+            const parentHeight = parentBlock.data?.height || 1000;
+            
+            // Approximate child dimensions
+            const childWidth = 150;  // Typical node width
+            const childHeight = 100; // Typical node height
+            
+            // Apply constraints - keep the child fully within the parent bounds
+            // with some padding (20px)
+            const constrainedX = Math.max(
+              20, 
+              Math.min(relativeX, parentWidth - childWidth - 20)
+            );
+            
+            const constrainedY = Math.max(
+              50,  // Higher min for Y to avoid header overlap
+              Math.min(relativeY, parentHeight - childHeight - 20)
+            );
+            
+            // If constraints were applied, update the position
+            if (constrainedX !== relativeX || constrainedY !== relativeY) {
+              const constrainedAbsolutePosition = {
+                x: parentBlock.position.x + constrainedX,
+                y: parentBlock.position.y + constrainedY
+              };
+              
+              // Update the position in the new state
+              newState.blocks[id].position = constrainedAbsolutePosition;
+            }
+          }
+        }
+        
+        // If this is a loop node, update positions of all child nodes
+        if (isLoopNode && (deltaX !== 0 || deltaY !== 0)) {
+          // Find all child blocks that have this loop node as parent
+          Object.entries(get().blocks).forEach(([childId, childBlock]) => {
+            if (childBlock.data?.parentId === id) {
+              // Update the child block's absolute position by the same delta
+              newState.blocks[childId] = {
+                ...childBlock,
+                position: {
+                  x: childBlock.position.x + deltaX,
+                  y: childBlock.position.y + deltaY,
+                },
+              };
+            }
+          });
+        }
+        
+        set(newState);
         // No sync here as this is a frequent operation during dragging
       },
 

@@ -38,6 +38,7 @@ const logger = createLogger('Workflow')
 const nodeTypes: NodeTypes = {
   workflowBlock: WorkflowBlock,
   group: LoopNodeComponent,
+  loop: LoopNodeComponent,
 }
 
 const edgeTypes: EdgeTypes = { workflowEdge: WorkflowEdge }
@@ -277,10 +278,13 @@ function WorkflowContent() {
       const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
 
       // Calculate position relative to parent if it exists
-      let position = block.position
+      let position = { ...block.position }; // Clone to avoid mutations
+
+      // If this block belongs to a loop node, calculate its position relative to the parent
       if (block.data?.parentId) {
         const parentBlock = blocks[block.data.parentId]
         if (parentBlock) {
+          // For child nodes, we want to render them at positions relative to the parent
           position = {
             x: block.position.x - parentBlock.position.x,
             y: block.position.y - parentBlock.position.y,
@@ -296,7 +300,8 @@ function WorkflowContent() {
         // Set parentId directly on the node if it exists
         ...(block.data?.parentId && {
           parentId: block.data.parentId,
-          extent: 'parent'
+          extent: 'parent',
+          draggable: true // Make sure child nodes are draggable
         }),
         dragHandle: '.workflow-drag-handle',
         data: {
@@ -459,32 +464,84 @@ function WorkflowContent() {
     }
   }, [])
 
+  // Add a utility for throttling function calls
+  const throttle = useCallback((func: Function, delay: number): Function => {
+    let lastCall = 0;
+    return function (...args: any[]) {
+      const now = Date.now();
+      if (now - lastCall < delay) {
+        return;
+      }
+      lastCall = now;
+      return func(...args);
+    };
+  }, []);
+  
+  // Throttled version of updateBlockPosition to prevent too many updates
+  const throttledUpdatePosition = useMemo(
+    () => throttle((id: string, pos: any) => updateBlockPosition(id, pos), 16), // ~60fps
+    [throttle, updateBlockPosition]
+  );
+
   // Update the onNodesChange handler to properly handle parent-child relationships
   const onNodesChange = useCallback(
     (changes: any) => {
       changes.forEach((change: any) => {
         if (change.type === 'position' && change.position) {
-          const node = nodes.find((n) => n.id === change.id)
+          const node = reactFlowInstance.getNode(change.id)
           if (!node) return
 
-          // If node has a parent, update position relative to parent
+          // If this is a child node being dragged inside a parent
           if (node.parentId) {
-            const parentBlock = blocks[node.parentId]
-            if (parentBlock) {
-              const absolutePosition = {
-                x: change.position.x + parentBlock.position.x,
-                y: change.position.y + parentBlock.position.y,
-              }
-              updateBlockPosition(change.id, absolutePosition)
-            }
+            const parentNode = reactFlowInstance.getNode(node.parentId)
+            if (!parentNode) return;
+            
+            // Get parent dimensions from style or fallback to defaults
+            const parentStyle = parentNode.style || {};
+            const parentWidth = (parentStyle.width as number) || 800;
+            const parentHeight = (parentStyle.height as number) || 1000;
+            
+            // Child node approximate dimensions
+            const childWidth = 320
+            const childHeight = 180
+            
+            // Constrain position to stay within parent bounds
+            // Allow some margin from the edges (20px)
+            const constrainedPosition = {
+              x: Math.max(20, Math.min(change.position.x, parentWidth - childWidth - 20)),
+              y: Math.max(20, Math.min(change.position.y, parentHeight - childHeight - 20))
+            };
+            
+            // Calculate the absolute position based on the parent position and relative position
+            const absolutePosition = {
+              x: blocks[node.parentId].position.x + constrainedPosition.x,
+              y: blocks[node.parentId].position.y + constrainedPosition.y
+            };
+            
+            // Update the relative position in ReactFlow
+            reactFlowInstance.setNodes(nodes => 
+              nodes.map(n => {
+                if (n.id === change.id) {
+                  return {
+                    ...n,
+                    position: constrainedPosition
+                  }
+                }
+                return n
+              })
+            );
+            
+            // Update the absolute position in the store
+            throttledUpdatePosition(change.id, absolutePosition);
           } else {
-            updateBlockPosition(change.id, change.position)
+            // If this is a regular node or parent node
+            updateBlockPosition(change.id, change.position);
           }
         }
-      })
+      });
     },
-    [nodes, blocks, updateBlockPosition]
-  )
+    [reactFlowInstance, blocks, updateBlockPosition, throttledUpdatePosition]
+  );
 
   // Update the onDragEnd handler
   const onDragEnd = useCallback((event: any) => {
@@ -712,6 +769,8 @@ function WorkflowContent() {
           edgesUpdatable={true}
           className="workflow-container h-full"
           nodeExtent={[[-10000, -10000], [10000, 10000]]}
+          snapToGrid={false}
+          snapGrid={[20, 20]}
         >
           <Background />
         </ReactFlow>
