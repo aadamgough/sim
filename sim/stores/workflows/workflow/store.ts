@@ -207,6 +207,114 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         workflowSync.sync()
       },
 
+      updateParentId: (id: string, parentId: string, extent: 'parent') => {
+        const block = get().blocks[id];
+        if (!block) {
+          console.warn(`Cannot set parent: Block ${id} not found`);
+          return;
+        }
+        
+        console.log('UpdateParentId called:', { 
+          blockId: id, 
+          blockName: block.name, 
+          blockType: block.type, 
+          newParentId: parentId,
+          extent,
+          currentParentId: block.data?.parentId 
+        });
+        
+        // Skip if the parent ID hasn't changed
+        if (block.data?.parentId === parentId) {
+          console.log('Parent ID unchanged, skipping update');
+          return;
+        }
+        
+        // Get parent node to calculate relative position
+        const parentBlock = get().blocks[parentId];
+        if (!parentBlock) {
+          console.warn(`Cannot set parent: Parent block ${parentId} not found`);
+          return;
+        }
+        
+        console.log('Found parent block:', { 
+          parentId, 
+          parentType: parentBlock.type,
+          parentPosition: parentBlock.position,
+          parentDimensions: {
+            width: parentBlock.data?.width || 800,
+            height: parentBlock.data?.height || 1000
+          }
+        });
+        
+        // Calculate the block's position relative to the new parent
+        const absolutePosition = { ...block.position };
+        const relativePosition = {
+          x: absolutePosition.x - parentBlock.position.x,
+          y: absolutePosition.y - parentBlock.position.y,
+        };
+        
+        console.log('Position calculations:', {
+          blockAbsolutePosition: absolutePosition,
+          calculatedRelativePosition: relativePosition
+        });
+        
+        // Make sure the position stays within reasonable bounds of the parent
+        const parentWidth = parentBlock.data?.width || 800;
+        const parentHeight = parentBlock.data?.height || 1000;
+        const childWidth = 320; // Approximate width of a block
+        const childHeight = 180; // Approximate height of a block
+        
+        const constrainedRelativePosition = {
+          x: Math.max(50, Math.min(relativePosition.x, parentWidth - childWidth)),
+          y: Math.max(50, Math.min(relativePosition.y, parentHeight - childHeight)),
+        };
+        
+        // Recalculate absolute position from constrained relative position
+        const constrainedAbsolutePosition = {
+          x: parentBlock.position.x + constrainedRelativePosition.x,
+          y: parentBlock.position.y + constrainedRelativePosition.y,
+        };
+        
+        console.log('Constrained positions:', {
+          constrainedRelativePosition,
+          constrainedAbsolutePosition
+        });
+        
+        // Update the block with the new parent ID and constrained position
+        const newState = {
+          blocks: {
+            ...get().blocks,
+            [id]: {
+              ...block,
+              position: constrainedAbsolutePosition,
+              data: {
+                ...block.data,
+                parentId,
+                extent,
+              }
+            },
+          },
+          edges: [...get().edges],
+          loops: { ...get().loops },
+        };
+        
+        console.log('Updating block in store with new parent relationship:', {
+          blockId: id,
+          newParentId: parentId,
+          newPosition: constrainedAbsolutePosition,
+          newData: {
+            ...block.data,
+            parentId,
+            extent,
+          }
+        });
+        
+        set(newState);
+        pushHistory(set, get, newState, `Set parent for ${block.name}`);
+        get().updateLastSaved();
+        workflowSync.sync();
+      },
+
       removeBlock: (id: string) => {
         // First, clean up any subblock values for this block
         const subBlockStore = useSubBlockStore.getState()

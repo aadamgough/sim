@@ -61,7 +61,7 @@ function WorkflowContent() {
 
   // Store access
   const { workflows, setActiveWorkflow, createWorkflow } = useWorkflowRegistry()
-  const { blocks, edges, loops, addBlock, updateBlockPosition, addEdge, removeEdge } =
+  const { blocks, edges, addBlock, updateBlockPosition, addEdge, removeEdge, updateParentId } =
     useWorkflowStore()
   const { setValue: setSubBlockValue } = useSubBlockStore()
   const { markAllAsRead } = useNotificationStore()
@@ -334,6 +334,23 @@ function WorkflowContent() {
 
     return nodeArray
   }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled])
+
+  // After the nodes useMemo, add this effect to log when nodes change
+  useEffect(() => {
+    // Find all parent-child relationships to validate they're set correctly
+    const childNodes = nodes.filter(node => node.parentId);
+    if (childNodes.length > 0) {
+      logger.info('Current parent-child relationships:', {
+        childCount: childNodes.length,
+        relationships: childNodes.map(node => ({
+          nodeId: node.id,
+          nodeType: node.data?.type || node.type,
+          parentId: node.parentId,
+          relativePosition: node.position
+        }))
+      });
+    }
+  }, [nodes]);
 
   // Update the onDrop handler
   const onDrop = useCallback(
@@ -615,17 +632,273 @@ function WorkflowContent() {
         const loopNodeId = loopNode.getAttribute('data-id')
         
         if (draggedNodeId && loopNodeId) {
-          logger.info('Node dragged onto loop:', { 
+          logger.info('Node dragged onto loop node and released:', { 
             draggedNodeId, 
-            loopNodeId
+            loopNodeId,
+            draggedNodeType: event.target.getAttribute('data-type') || 'unknown',
+            exactTarget: event.target.className
           })
           
-          // The drop handling will be done by the loop node component
-          // This is just for logging
+          // Log the current relationships for the dragged node
+          setTimeout(() => {
+            // Check if the relationship was established
+            const draggedNode = reactFlowInstance.getNode(draggedNodeId);
+            const storeNode = blocks[draggedNodeId];
+            
+            logger.info('Checking relationship after drag end:', {
+              draggedNodeId,
+              loopNodeId,
+              reactFlowParentId: draggedNode?.parentId,
+              storeParentId: storeNode?.data?.parentId,
+              reactFlowPosition: draggedNode?.position,
+              storePosition: storeNode?.position
+            });
+          }, 200);
         }
       }
     }
-  }, [])
+    
+    // Check for dragged nodes with data-drag-data attribute
+    const nodeToClear = document.querySelector('[data-drag-data]');
+    if (nodeToClear) {
+      const nodeId = nodeToClear.getAttribute('data-id');
+      const dragData = nodeToClear.getAttribute('data-drag-data');
+      logger.info('Found node with drag-data at end of drag that wasn\'t properly handled:', {
+        nodeId,
+        dragData
+      });
+      
+      // Clear the attribute
+      nodeToClear.removeAttribute('data-drag-data');
+    }
+  }, [blocks, reactFlowInstance]);
+
+  // Handle node drag start to make existing blocks draggable into a loop node
+  const onNodeDragStart = useCallback((event: React.MouseEvent, node: any) => {
+    // Don't allow dragging of starter, loop, or already parented nodes into loops
+    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop' || node.parentId) {
+      logger.info('Ignoring drag for node that cannot be moved to loop:', { 
+        id: node.id, 
+        type: node.data?.type || node.type,
+        hasParent: !!node.parentId
+      });
+      return;
+    }
+    
+    logger.info('Started dragging node from canvas:', { 
+      id: node.id, 
+      type: node.data?.type,
+      position: node.position,
+      name: node.data?.name || 'Unknown'
+    });
+    
+    // Add drag data to the node's DOM element for later retrieval during drop
+    // We can't access dataTransfer here as it's a MouseEvent, not a DragEvent
+    const nodeElement = document.querySelector(`[data-id="${node.id}"]`);
+    if (nodeElement) {
+      const dragData = {
+        type: node.data?.type,
+        id: node.id,
+        isExistingNode: true
+      };
+      
+      logger.info('Setting drag data on element:', { 
+        nodeId: node.id,
+        dragData 
+      });
+      
+      // Store data as a custom attribute for retrieval during drop
+      nodeElement.setAttribute('data-drag-data', JSON.stringify(dragData));
+    } else {
+      logger.warn('Could not find DOM element for node:', { id: node.id });
+    }
+  }, []);
+
+  // Handle node drag end event to establish parent-child relationships
+  const onNodeDragStop = useCallback((event: React.MouseEvent, node: any) => {
+    logger.info('Node drag stopped:', { 
+      nodeId: node.id, 
+      nodeType: node.data?.type,
+      position: node.position 
+    });
+
+    // Don't process nodes that shouldn't be moved to loops
+    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop' || node.parentId) {
+      return;
+    }
+
+    // First clean up any loop node highlighting
+    document.querySelectorAll('.loop-node-drag-over, .dragging-over').forEach(el => {
+      el.classList.remove('loop-node-drag-over');
+      el.classList.remove('dragging-over');
+    });
+
+    // Check if this node is over a loop node
+    // We need to detect if this node is positioned over a loop node
+    const nodeElement = document.querySelector(`[data-id="${node.id}"]`);
+    if (!nodeElement) return;
+
+    // Get node center point for more accurate detection
+    const nodeRect = nodeElement.getBoundingClientRect();
+    const nodeCenterX = nodeRect.left + nodeRect.width / 2;
+    const nodeCenterY = nodeRect.top + nodeRect.height / 2;
+
+    // Find all loop nodes and check if this node is over one
+    const loopNodes = document.querySelectorAll('.react-flow__node-group');
+    for (const loopNodeEl of loopNodes) {
+      const loopId = loopNodeEl.getAttribute('data-id');
+      // Skip if we can't identify the loop
+      if (!loopId) continue;
+
+      // Check if node center is within loop node bounds
+      const loopRect = loopNodeEl.getBoundingClientRect();
+      if (
+        nodeCenterX >= loopRect.left && 
+        nodeCenterX <= loopRect.right && 
+        nodeCenterY >= loopRect.top && 
+        nodeCenterY <= loopRect.bottom
+      ) {
+        logger.info('Node dropped over loop node:', {
+          nodeId: node.id,
+          loopId,
+          nodeCenterPoint: { x: nodeCenterX, y: nodeCenterY },
+          loopBounds: {
+            left: loopRect.left,
+            right: loopRect.right,
+            top: loopRect.top,
+            bottom: loopRect.bottom
+          }
+        });
+
+        // Get the loop node from React Flow
+        const loopNode = reactFlowInstance.getNode(loopId);
+        if (!loopNode) {
+          logger.error('Could not find loop node in ReactFlow:', { loopId });
+          continue;
+        }
+
+        // Convert node position to a position relative to the loop node
+        // First get the loop node's content area
+        const contentArea = loopNodeEl.querySelector('[data-dragarea="true"]');
+        if (!contentArea) {
+          logger.error('Could not find content area in loop node');
+          continue;
+        }
+
+        const contentRect = contentArea.getBoundingClientRect();
+        
+        // Calculate relative position in the loop node
+        const loopWidth = loopNode.style?.width as number || 800;
+        const loopHeight = loopNode.style?.height as number || 1000;
+        
+        // Calculate screen coordinates relative to the content area
+        const screenRelativeX = nodeCenterX - contentRect.left;
+        const screenRelativeY = nodeCenterY - contentRect.top;
+        
+        // Convert to logical loop coordinates
+        const relativePosition = {
+          x: screenRelativeX * loopWidth / contentRect.width,
+          y: screenRelativeY * loopHeight / contentRect.height
+        };
+        
+        // Ensure position is within loop bounds
+        const constrainedX = Math.max(50, Math.min(relativePosition.x, loopWidth - 100));
+        const constrainedY = Math.max(50, Math.min(relativePosition.y, loopHeight - 100));
+        
+        // Calculate absolute position
+        const absolutePosition = {
+          x: blocks[loopId].position.x + constrainedX,
+          y: blocks[loopId].position.y + constrainedY
+        };
+        
+        logger.info('Setting node as child of loop:', {
+          nodeId: node.id,
+          loopId,
+          relativePosition: { x: constrainedX, y: constrainedY },
+          absolutePosition
+        });
+        
+        // Update the parent relationship in the store
+        updateParentId(node.id, loopId, 'parent');
+        
+        // Update ReactFlow node position
+        reactFlowInstance.setNodes(nodes => 
+          nodes.map(n => {
+            if (n.id === node.id) {
+              return {
+                ...n,
+                position: { x: constrainedX, y: constrainedY },
+                parentId: loopId,
+                extent: 'parent' as const
+              };
+            }
+            return n;
+          })
+        );
+        
+        // We found a matching loop, so we can break
+        break;
+      }
+    }
+    
+    // Remove any leftover drag data
+    if (nodeElement) {
+      if (nodeElement.hasAttribute('data-drag-data')) {
+        nodeElement.removeAttribute('data-drag-data');
+      }
+    }
+  }, [blocks, reactFlowInstance, updateParentId]);
+
+  // Add handler for node drag to provide visual feedback when dragging over loops
+  const onNodeDrag = useCallback((event: React.MouseEvent, node: any) => {
+    // Don't process nodes that shouldn't be moved to loops
+    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop' || node.parentId) {
+      return;
+    }
+    
+    // Get node center point for more accurate detection
+    const nodeElement = document.querySelector(`[data-id="${node.id}"]`);
+    if (!nodeElement) return;
+    
+    const nodeRect = nodeElement.getBoundingClientRect();
+    const nodeCenterX = nodeRect.left + nodeRect.width / 2;
+    const nodeCenterY = nodeRect.top + nodeRect.height / 2;
+    
+    // Find all loop nodes and check if this node is over one
+    const loopNodes = document.querySelectorAll('.react-flow__node-group');
+    let foundLoop = false;
+    
+    for (const loopNodeEl of loopNodes) {
+      const loopId = loopNodeEl.getAttribute('data-id');
+      if (!loopId) continue;
+      
+      // Check if node center is within loop node bounds
+      const loopRect = loopNodeEl.getBoundingClientRect();
+      if (
+        nodeCenterX >= loopRect.left && 
+        nodeCenterX <= loopRect.right && 
+        nodeCenterY >= loopRect.top && 
+        nodeCenterY <= loopRect.bottom
+      ) {
+        // This node is over a loop - add highlight class
+        loopNodeEl.classList.add('loop-node-drag-over');
+        loopNodeEl.classList.add('dragging-over');
+        foundLoop = true;
+      } else {
+        // Remove highlight class if not over this loop
+        loopNodeEl.classList.remove('loop-node-drag-over');
+        loopNodeEl.classList.remove('dragging-over');
+      }
+    }
+    
+    // If we didn't find any loops in this pass, make sure all are cleared
+    if (!foundLoop) {
+      document.querySelectorAll('.loop-node-drag-over, .dragging-over').forEach(el => {
+        el.classList.remove('loop-node-drag-over');
+        el.classList.remove('dragging-over');
+      });
+    }
+  }, []);
 
   // Init workflow
   useEffect(() => {
@@ -798,6 +1071,9 @@ function WorkflowContent() {
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragEnd={onDragEnd}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDragStop={onNodeDragStop}
+          onNodeDrag={onNodeDrag}
           fitView
           minZoom={0.1}
           maxZoom={1.3}

@@ -11,14 +11,13 @@ import { LoopActionBar } from './components/loop-action-bar'
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
-  const { deleteElements, getNode, getNodes, setNodes, screenToFlowPosition } = useReactFlow()
+  const { getNode, getNodes, setNodes, screenToFlowPosition } = useReactFlow()
   const {
-    removeBlock,
     updateNodeDimensions,
     addBlock,
     blocks,
     addEdge,
-    updateBlockPosition
+    updateParentId
   } = useWorkflowStore()
   
   // State to track if a valid block is being dragged over
@@ -29,6 +28,76 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   // Get loop configuration values for display
   const loopType = data?.loopType || 'for'
   const iterations = data?.count || 5
+  
+  // Helper function to refresh ReactFlow nodes when parent-child relationships change
+  const refreshReactFlowNodesWithCorrectParentage = useCallback((targetNodeId: string) => {
+    logger.info('Refreshing ReactFlow nodes to ensure correct parent-child relationships:', { targetNodeId });
+    
+    // Get the current block state
+    const currentBlock = blocks[targetNodeId];
+    if (!currentBlock) {
+      logger.warn('Block not found in store for refresh:', { targetNodeId });
+      return;
+    }
+    
+    // Only proceed if this block should be a child of the loop
+    if (currentBlock.data?.parentId !== id) {
+      logger.warn('Block does not have the expected parent ID:', {
+        blockId: targetNodeId,
+        expectedParentId: id,
+        actualParentId: currentBlock.data?.parentId
+      });
+      return;
+    }
+    
+    // Get the parent node
+    const parentNode = blocks[id];
+    if (!parentNode) {
+      logger.warn('Parent node not found for refresh:', { parentId: id });
+      return;
+    }
+    
+    // Calculate the correct relative position
+    const absolutePosition = currentBlock.position;
+    const relativePosition = {
+      x: absolutePosition.x - parentNode.position.x,
+      y: absolutePosition.y - parentNode.position.y
+    };
+    
+    logger.info('Calculated relative position for child node:', {
+      blockId: targetNodeId,
+      absolutePosition,
+      parentPosition: parentNode.position,
+      relativePosition
+    });
+    
+    // Update the ReactFlow nodes directly
+    setNodes(nodes => {
+      // Find if the node already exists in ReactFlow
+      const existingNodeIndex = nodes.findIndex(n => n.id === targetNodeId);
+      if (existingNodeIndex === -1) {
+        logger.warn('Node not found in ReactFlow for refresh:', { nodeId: targetNodeId });
+        return nodes;
+      }
+      
+      // Update the node with correct parent relationship and position
+      const updatedNodes = [...nodes];
+      updatedNodes[existingNodeIndex] = {
+        ...updatedNodes[existingNodeIndex],
+        position: relativePosition,
+        parentId: id,
+        extent: 'parent' as const
+      };
+      
+      logger.info('Updated ReactFlow node with parent relationship:', {
+        nodeId: targetNodeId,
+        position: relativePosition,
+        parentId: id
+      });
+      
+      return updatedNodes;
+    });
+  }, [id, blocks, setNodes]);
   
   // Initialize node dimensions from props or defaults
   useEffect(() => {
@@ -67,7 +136,14 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     e.preventDefault()
     e.stopPropagation()
     
-    logger.info('Drop detected within loop node:', { id, target: (e.target as HTMLElement).className })
+    logger.info('Drop detected within loop node:', { 
+      id, 
+      target: (e.target as HTMLElement).className,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      dataTransferTypes: e.dataTransfer.types,
+      hasDataAttribute: !!document.querySelector('[data-drag-data]')
+    })
     
     // Clean up any visual effects immediately when drop occurs
     const nodeElement = document.querySelector(`[data-id="${id}"]`);
@@ -143,18 +219,145 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         y: loopNode.position.y + relativePosition.y
       }
       
-      logger.info('Position calculations:', { 
-        dropPosition,
-        loopPosition: loopNode.position,
-        relativePosition,
-        absolutePosition,
-        bounds: {
-          width: loopNode.style?.width || 800,
-          height: loopNode.style?.height || 1000
+      // Helper function for auto-connecting blocks
+      const handleAutoConnect = (targetId: string, pos: { x: number, y: number }) => {
+        // Find the loop's start node or closest block within the loop
+        const loopStartBlocks = getNodes().filter(
+          node => node.parentId === id && node.data?.isLoopStart
+        )
+        
+        if (loopStartBlocks.length > 0) {
+          // Connect from loop start block
+          const sourceBlock = loopStartBlocks[0]
+          addEdge({
+            id: crypto.randomUUID(),
+            source: sourceBlock.id,
+            target: targetId,
+            sourceHandle: 'loop-start-source',
+            targetHandle: 'target',
+            type: 'workflowEdge',
+          })
+        } else {
+          // Look for closest block within the loop
+          const loopBlocks = getNodes()
+            .filter(node => node.parentId === id && node.id !== targetId)
+            .map(node => ({
+              id: node.id,
+              position: node.position,
+              distance: Math.sqrt(
+                Math.pow(node.position.x - pos.x, 2) +
+                Math.pow(node.position.y - pos.y, 2)
+              ),
+            }))
+            .sort((a, b) => a.distance - b.distance)
+          
+          if (loopBlocks.length > 0) {
+            // Connect from closest block
+            const closestBlock = loopBlocks[0]
+            addEdge({
+              id: crypto.randomUUID(),
+              source: closestBlock.id,
+              target: targetId,
+              sourceHandle: 'source',
+              targetHandle: 'target',
+              type: 'workflowEdge',
+            })
+          }
         }
-      })
-
-      // Get the block data from the drag event
+      }
+      
+      // First check for nodes being dragged via our custom attribute
+      const draggingNodeElement = document.querySelector('[data-drag-data]')
+      if (draggingNodeElement) {
+        const dragDataStr = draggingNodeElement.getAttribute('data-drag-data')
+        logger.info('Found element with drag data during drop:', {
+          nodeId: draggingNodeElement.getAttribute('data-id'),
+          dragDataStr
+        })
+        
+        if (dragDataStr) {
+          try {
+            const dragData = JSON.parse(dragDataStr)
+            logger.info('Parsed drag data during drop:', { dragData })
+            
+            if (dragData.isExistingNode && dragData.id) {
+              // Clear the attribute now that we've used it
+              draggingNodeElement.removeAttribute('data-drag-data')
+              logger.info('Cleared drag data attribute')
+              
+              // Process the existing block
+              const existingBlockId = dragData.id
+              
+              if (existingBlockId && blocks[existingBlockId]) {
+                logger.info('Found existing block in store:', {
+                  blockId: existingBlockId,
+                  blockType: blocks[existingBlockId].type,
+                  blockName: blocks[existingBlockId].name,
+                  blockPos: blocks[existingBlockId].position
+                })
+                
+                // Check if the block is already in a different loop
+                const existingParentId = blocks[existingBlockId].data?.parentId
+                if (existingParentId && existingParentId !== id) {
+                  logger.info('Block already belongs to another parent:', { 
+                    blockId: existingBlockId,
+                    currentParent: existingParentId,
+                    targetParent: id
+                  })
+                  
+                  // If we decide to allow moving between parents, we'd need to first remove
+                  // it from the original parent before adding to the new one
+                  // For now, let's avoid this complexity
+                  return
+                }
+                
+                logger.info('Updating existing dragged block:', { 
+                  blockId: existingBlockId,
+                  relativePosition,
+                  absolutePosition,
+                  newParentId: id
+                })
+                
+                // Use the dedicated function to update parent ID, which handles all the position calculations
+                logger.info('Calling updateParentId from drop handler:', {
+                  blockId: existingBlockId,
+                  parentId: id,
+                  extent: 'parent'
+                })
+                updateParentId(existingBlockId, id, 'parent')
+                
+                // Refresh the ReactFlow node after a delay to ensure store updates are complete
+                setTimeout(() => {
+                  refreshReactFlowNodesWithCorrectParentage(existingBlockId);
+                }, 100);
+                
+                // Handle auto-connect if enabled
+                const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
+                if (isAutoConnectEnabled) {
+                  logger.info('Auto-connecting block in loop')
+                  handleAutoConnect(existingBlockId, relativePosition);
+                }
+                
+                return;
+              } else {
+                logger.warn('Block from drag data not found in store:', {
+                  blockId: existingBlockId,
+                  availableBlockIds: Object.keys(blocks)
+                })
+              }
+            }
+          } catch (parseErr) {
+            logger.error('Error parsing drag data:', { parseErr, dragDataStr });
+          }
+        }
+      } else {
+        logger.info('No element with drag-data found during drop')
+      }
+      
+      // Try to get block data from dataTransfer
+      let targetBlockId: string | undefined;
+      
+      // If there was no drag-data, try to get the block data from the drag event
       const rawData = e.dataTransfer.getData('application/json')
       if (!rawData) {
         logger.error('No data found in drop event')
@@ -171,7 +374,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
 
       // Check if this is an existing block being moved
       const existingBlockId = data.id
-      let targetBlockId: string | undefined = existingBlockId
+      targetBlockId = existingBlockId
 
       if (existingBlockId && blocks[existingBlockId]) {
         // Check if the block is already in a different loop
@@ -195,137 +398,62 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           absolutePosition
         })
         
-        // When moving an existing block into a loop, update its position and parent relationship
-        const updatedBlock = {
-          ...blocks[existingBlockId],
-          position: absolutePosition, // Store absolute position in the block
-          data: {
-            ...blocks[existingBlockId].data,
-            parentId: id,
-            extent: 'parent'
-          }
-        }
-        
-        // Update the store with the absolute position
-        useWorkflowStore.setState(state => ({
-          blocks: {
-            ...state.blocks,
-            [existingBlockId]: updatedBlock
-          }
-        }))
-        
-        // Update React Flow nodes with the relative position
-        setNodes((nds) =>
-          nds.map((node) =>
-            node.id === existingBlockId
-              ? {
-                  ...node,
-                  position: relativePosition, // Use relative position for React Flow node
-                  parentId: id,
-                  extent: 'parent',
-                }
-              : node
-          )
-        )
+        // Use the dedicated function to update parent ID, which handles all the position calculations
+        updateParentId(existingBlockId, id, 'parent')
+
+        // Refresh the ReactFlow node after a delay to ensure store updates are complete
+        setTimeout(() => {
+          refreshReactFlowNodesWithCorrectParentage(existingBlockId);
+        }, 100);
       } else {
-        // Create a new block
-        targetBlockId = crypto.randomUUID()
+        // Create a new block from the toolbar item that was dragged
+        logger.info('Creating new block from drag:', { type, position: absolutePosition })
+        
         const blockConfig = getBlock(type)
         if (!blockConfig) {
           logger.error('Invalid block type:', { type })
           return
         }
         
-        const name = `${blockConfig.name} ${
-          Object.values(blocks).filter((b) => b.type === type).length + 1
-        }`
+        const blockId = crypto.randomUUID()
+        const name = `${blockConfig.name} ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
         
-        logger.info('Creating new block in loop:', {
-          blockId: targetBlockId,
+        // Add the block with parent information
+        addBlock(blockId, type, name, absolutePosition, {
           parentId: id,
-          relativePosition,
-          absolutePosition
+          extent: 'parent' as const
         })
         
-        // Add the new block with proper parent relationship parameters
-        // Use the absolute position for storage in the block store
-        addBlock(
-          targetBlockId,
-          type,
-          name,
-          absolutePosition, // Store absolute position
-          {}, // Pass an empty data object
-          id, // Pass parentId as a separate parameter
-          'parent' // Pass extent as a separate parameter
-        )
-
-        // Manually update the node position in ReactFlow to ensure it's displayed at the right place
-        setNodes(nodes => {
-          const targetNode = nodes.find(n => n.id === targetBlockId)
-          if (targetNode) {
-            return nodes.map(n => 
-              n.id === targetBlockId
-                ? { ...n, position: relativePosition } // Use relative position for display
-                : n
-            )
-          }
-          return nodes
-        })
+        targetBlockId = blockId
+        
+        // Update React Flow nodes to make sure the new node is properly positioned
+        setTimeout(() => {
+          setNodes((nds) => {
+            const newNodeIndex = nds.findIndex(node => node.id === blockId)
+            if (newNodeIndex !== -1) {
+              const updatedNodes = [...nds]
+              updatedNodes[newNodeIndex] = {
+                ...updatedNodes[newNodeIndex],
+                position: relativePosition,
+              }
+              return updatedNodes
+            }
+            return nds
+          })
+        }, 50)
       }
 
-      // Auto-connect if enabled
+      // Handle auto-connect for new blocks
       const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
       if (isAutoConnectEnabled && targetBlockId) {
-        // Find the loop's start node or closest block within the loop
-        const loopStartBlocks = getNodes().filter(
-          node => node.parentId === id && node.data?.isLoopStart
-        )
-        
-        if (loopStartBlocks.length > 0) {
-          // Connect from loop start block
-          const sourceBlock = loopStartBlocks[0]
-          addEdge({
-            id: crypto.randomUUID(),
-            source: sourceBlock.id,
-            target: targetBlockId,
-            sourceHandle: 'loop-start-source',
-            targetHandle: 'target',
-            type: 'workflowEdge',
-          })
-        } else {
-          // Look for closest block within the loop
-          const loopBlocks = getNodes()
-            .filter(node => node.parentId === id && node.id !== targetBlockId)
-            .map(node => ({
-              id: node.id,
-              position: node.position,
-              distance: Math.sqrt(
-                Math.pow(node.position.x - relativePosition.x, 2) +
-                Math.pow(node.position.y - relativePosition.y, 2)
-              ),
-            }))
-            .sort((a, b) => a.distance - b.distance)
-          
-          if (loopBlocks.length > 0) {
-            // Connect from closest block
-            const closestBlock = loopBlocks[0]
-            addEdge({
-              id: crypto.randomUUID(),
-              source: closestBlock.id,
-              target: targetBlockId,
-              sourceHandle: 'source',
-              targetHandle: 'target',
-              type: 'workflowEdge',
-            })
-          }
-        }
+        handleAutoConnect(targetBlockId, relativePosition);
       }
     } catch (err) {
       logger.error('Error handling drop on loop node:', { err })
     } finally {
       setIsValidDragOver(false)
     }
-  }, [id, screenToFlowPosition, addEdge, getNodes, setNodes, blocks, addBlock])
+  }, [id, screenToFlowPosition, addEdge, getNodes, setNodes, blocks, addBlock, updateParentId, refreshReactFlowNodesWithCorrectParentage])
   
   // Set up drag event handlers
   useEffect(() => {
@@ -345,13 +473,52 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           const nodeId = existingNodeElement.getAttribute('data-id')
           if (nodeId && nodeId !== id) {
             // This is an existing node being dragged over the loop
-            logger.info('Existing node dragged over loop:', { nodeId, loopId: id })
+            logger.info('Existing node dragged over loop via DOM traversal:', { 
+              nodeId, 
+              loopId: id,
+              target: (target as HTMLElement).className
+            })
             setIsValidDragOver(true)
             
             // Add animated effect to highlight the drop area
             nodeElement.classList.add('loop-node-drag-over');
             nodeElement.classList.add('dragging-over');
             return
+          }
+        }
+        
+        // Check for nodes being dragged using our custom attribute
+        const draggingNodeElement = document.querySelector('[data-drag-data]')
+        if (draggingNodeElement) {
+          const nodeId = draggingNodeElement.getAttribute('data-id')
+          if (nodeId && nodeId !== id) {
+            const dragData = draggingNodeElement.getAttribute('data-drag-data')
+            if (dragData) {
+              try {
+                const parsedData = JSON.parse(dragData)
+                logger.info('Found node with drag data:', {
+                  nodeId,
+                  loopId: id,
+                  dragData: parsedData
+                })
+                
+                if (parsedData.isExistingNode && parsedData.type && parsedData.type !== 'starter' && parsedData.type !== 'loop') {
+                  // This is an existing node being dragged from the canvas
+                  logger.info('Existing node with drag data being dragged over loop:', { 
+                    nodeId, 
+                    loopId: id, 
+                    data: parsedData 
+                  })
+                  setIsValidDragOver(true)
+                  nodeElement.classList.add('loop-node-drag-over');
+                  nodeElement.classList.add('dragging-over');
+                  return
+                }
+              } catch (parseError) {
+                // Ignore JSON parse errors
+                logger.error('Error parsing drag data during dragover:', { parseError, dragData })
+              }
+            }
           }
         }
         
@@ -405,6 +572,18 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       nodeElement.removeEventListener('drop', handleDrop as unknown as EventListener)
     }
   }, [id, handleDrop])
+  
+  // Clean up any leftover drag data attributes when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clean up any nodes with drag-data when component is unmounted
+      const nodeWithDragData = document.querySelector('[data-drag-data]');
+      if (nodeWithDragData) {
+        logger.info('Cleaning up leftover drag data on unmount');
+        nodeWithDragData.removeAttribute('data-drag-data');
+      }
+    };
+  }, []);
   
   const handleResize = useCallback((evt: any, params: { width: number; height: number }) => {
     logger.info('Loop node resized:', { id, width: params.width, height: params.height })
@@ -522,6 +701,83 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
             isHovered && 'hover-highlight'
           )}
           onDrop={handleDrop}
+          onDragOver={(e) => {
+            e.preventDefault();
+            const dragEvent = e.nativeEvent;
+            
+            // Check if we're dragging an existing node with custom attribute
+            const draggingNodeElement = document.querySelector('[data-drag-data]');
+            if (draggingNodeElement) {
+              const nodeId = draggingNodeElement.getAttribute('data-id');
+              if (nodeId && nodeId !== id) {
+                const dragData = draggingNodeElement.getAttribute('data-drag-data');
+                if (dragData) {
+                  try {
+                    const parsedData = JSON.parse(dragData);
+                    logger.info('React onDragOver found node with drag data:', {
+                      nodeId,
+                      loopId: id,
+                      dragData: parsedData
+                    });
+                    
+                    if (parsedData.isExistingNode && parsedData.type) {
+                      setIsValidDragOver(true);
+                      // Highlight effect
+                      const nodeElement = document.querySelector(`[data-id="${id}"]`);
+                      if (nodeElement) {
+                        nodeElement.classList.add('loop-node-drag-over');
+                        nodeElement.classList.add('dragging-over');
+                      }
+                      return;
+                    }
+                  } catch (err) {
+                    logger.error('Error parsing drag data:', err);
+                  }
+                }
+              }
+            }
+            
+            // Also check for toolbar items
+            try {
+              if (dragEvent.dataTransfer?.types.includes('application/json')) {
+                const rawData = dragEvent.dataTransfer.getData('application/json');
+                if (rawData) {
+                  const data = JSON.parse(rawData);
+                  const type = data.type || (data.data && data.data.type);
+                  logger.info('Toolbar item dragged over loop:', { type });
+                  
+                  if (type && type !== 'starter' && type !== 'loop' && type !== 'connectionBlock') {
+                    setIsValidDragOver(true);
+                    // Highlight effect
+                    const nodeElement = document.querySelector(`[data-id="${id}"]`);
+                    if (nodeElement) {
+                      nodeElement.classList.add('loop-node-drag-over');
+                      nodeElement.classList.add('dragging-over');
+                    }
+                    return;
+                  }
+                }
+              }
+            } catch (err) {
+              logger.error('Error checking dataTransfer:', err);
+            }
+            
+            // If we get here, no valid drag is happening
+            setIsValidDragOver(false);
+            const nodeElement = document.querySelector(`[data-id="${id}"]`);
+            if (nodeElement) {
+              nodeElement.classList.remove('loop-node-drag-over');
+              nodeElement.classList.remove('dragging-over');
+            }
+          }}
+          onDragLeave={(e) => {
+            setIsValidDragOver(false);
+            const nodeElement = document.querySelector(`[data-id="${id}"]`);
+            if (nodeElement) {
+              nodeElement.classList.remove('loop-node-drag-over');
+              nodeElement.classList.remove('dragging-over');
+            }
+          }}
           data-node-id={id}
           data-type="group"
         >
