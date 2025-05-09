@@ -190,19 +190,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       const screenRelativeX = clientX - contentRect.left
       const screenRelativeY = clientY - contentRect.top
       
-      logger.debug('Screen relative position:', { 
-        screenRelativeX, 
-        screenRelativeY,
-        clientX,
-        clientY
-      })
-      
-      // Convert to flow coordinates
-      const dropPosition = screenToFlowPosition({
-        x: clientX,
-        y: clientY
-      })
-      
       // Calculate position relative to the loop node in flow coordinates
       const relativePosition = {
         x: screenRelativeX * Number(loopNode.style?.width || 800) / contentRect.width,
