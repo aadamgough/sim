@@ -10,6 +10,8 @@ export const WorkflowEdge = ({
   sourcePosition,
   targetPosition,
   data,
+  source,
+  target,
 }: EdgeProps) => {
   const isHorizontal = sourcePosition === 'right' || sourcePosition === 'left'
 
@@ -25,17 +27,41 @@ export const WorkflowEdge = ({
   })
 
   const isSelected = id === data?.selectedEdgeId
+  const isWithinLoop = data?.isWithinLoop
+  const isLoopStartEdge = data?.isLoopStartEdge
+  
+  // Determine if this edge is connected to a loop node
+  const isLoopNodeEdge = target && target.includes('loop') || source && source.includes('loop')
 
+  // Use a different color for loop start edges
+  const edgeColor = isLoopStartEdge ? '#40E0D0' : isSelected ? '#475569' : '#94a3b8'
+  const edgeWidth = isLoopStartEdge ? 2.5 : 2
+  
+  // Handle deletion click with preserve parent-child relationships 
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (data?.onDelete) {
+      data.onDelete(id);
+    }
+  };
+  
   return (
     <>
       <BaseEdge
         path={edgePath}
         data-testid="workflow-edge"
+        data-edge-id={id}
+        data-is-within-loop={isWithinLoop ? 'true' : 'false'}
+        data-is-loop-start={isLoopStartEdge ? 'true' : 'false'}
+        data-loop-connected={isLoopNodeEdge ? 'true' : 'false'}
         style={{
-          strokeWidth: 2,
-          stroke: isSelected ? '#475569' : '#94a3b8',
+          strokeWidth: edgeWidth,
+          stroke: edgeColor,
           strokeDasharray: '5,5',
-          zIndex: -10,
+          // Prevent z-index changes for loop node edges that would cause positioning issues
+          zIndex: isLoopNodeEdge ? 0 : (isWithinLoop ? 100 : -10),
         }}
         interactionWidth={20}
       />
@@ -56,13 +82,7 @@ export const WorkflowEdge = ({
               pointerEvents: 'all',
               zIndex: 1000,
             }}
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              if (data?.onDelete) {
-                data.onDelete(id)
-              }
-            }}
+            onClick={handleDeleteClick}
           >
             <X className="h-5 w-5 text-red-500 hover:text-red-600" />
           </div>

@@ -179,12 +179,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       }
       
       const contentRect = contentArea.getBoundingClientRect()
-      logger.debug('Loop node content area:', { 
-        left: contentRect.left, 
-        top: contentRect.top,
-        width: contentRect.width,
-        height: contentRect.height
-      })
       
       // Calculate drop position relative to the content area in screen coordinates
       const screenRelativeX = clientX - contentRect.left
