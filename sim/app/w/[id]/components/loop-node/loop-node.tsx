@@ -6,7 +6,7 @@ import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
 import { getBlock } from '@/blocks'
 import { useGeneralStore } from '@/stores/settings/general/store'
-import { LoopActionBar } from './components/loop-action-bar'
+import { LoopConfigBadges } from './components/loop-config-badges'
 
 const logger = createLogger('LoopNode')
 
@@ -693,10 +693,9 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
             position: 'relative',
             boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
             overflow: 'visible', // Allow children to overflow
-            transition: 'all 0.2s ease-in-out',
           }}
           className={cn(
-            'transition-all duration-200 group-node',
+            'group-node',
             data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
             isHovered && 'hover-highlight',
             isValidDragOver && 'drag-highlight'
@@ -782,34 +781,32 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           data-node-id={id}
           data-type="group"
         >
-          {/* Simplified loop node header */}
-          <div className="flex items-center px-3 py-2 bg-background rounded-t-lg workflow-drag-handle cursor-move border-b border-dashed border-gray-300">
-            <div className="flex items-center justify-center w-6 h-6 rounded bg-[#40E0D0] mr-2">
-              <RepeatIcon className="w-4 h-4 text-white" />
-            </div>
-            
-            <div className="flex-1 flex items-center">
-              <div className="font-medium text-sm">
-                {data.label || 'Loop'} 
-                <span className="text-xs ml-2 text-muted-foreground">
-                  {loopType === 'for' 
-                    ? `(${iterations} iterations)` 
-                    : '(For each item)'}
-                </span>
-              </div>
-            </div>
-          </div>
-          
           {/* Child nodes container */}
           <div 
-            className="p-4 h-[calc(100%-40px)]" 
+            className="p-4 h-[calc(100%-10px)]" 
             data-dragarea="true"
             style={{
               position: 'relative',
               minHeight: '100%',
-              transform: 'none', // Ensure no transforms affect child positioning
             }}
           >
+            {/* Drag handle - invisible but allows dragging the loop node */}
+            <div 
+              className="absolute top-0 left-0 right-0 h-10 workflow-drag-handle cursor-move z-10 hover:bg-accent/10"
+              style={{ opacity: 0.001 }} // Nearly invisible but still detectable for hover
+            />
+            
+            {/* Delete button */}
+            <div 
+              className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full bg-background/90 hover:bg-red-100 border border-border cursor-pointer z-20 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                useWorkflowStore.getState().removeBlock(id);
+              }}
+            >
+              <X size={14} className="text-muted-foreground hover:text-red-500" />
+            </div>
+            
             {/* Loop Start Block - positioned at left middle */}
             <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
               <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative hover:bg-[#40E0D0]/30 transition-colors">
@@ -980,8 +977,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         </div>
       </div>
       
-      {/* Loop Action Bar - positioned outside the node */}
-      <LoopActionBar nodeId={id} data={data} />
+      {/* Loop Configuration Badges */}
+      <LoopConfigBadges nodeId={id} data={data} />
     </div>
   )
 })

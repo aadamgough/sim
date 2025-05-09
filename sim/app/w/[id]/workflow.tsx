@@ -783,39 +783,12 @@ function WorkflowContent() {
         if (!contentArea) {
           logger.error('Could not find content area in loop node');
           continue;
-        }
-
-        const contentRect = contentArea.getBoundingClientRect();
-        
-        // Calculate relative position in the loop node
-        const loopWidth = loopNode.style?.width as number || 800;
-        const loopHeight = loopNode.style?.height as number || 1000;
-        
-        // Calculate screen coordinates relative to the content area
-        const screenRelativeX = nodeCenterX - contentRect.left;
-        const screenRelativeY = nodeCenterY - contentRect.top;
-        
-        // Convert to logical loop coordinates
-        const relativePosition = {
-          x: screenRelativeX * loopWidth / contentRect.width,
-          y: screenRelativeY * loopHeight / contentRect.height
-        };
-        
-        // Ensure position is within loop bounds
-        const constrainedX = Math.max(50, Math.min(relativePosition.x, loopWidth - 100));
-        const constrainedY = Math.max(50, Math.min(relativePosition.y, loopHeight - 100));
-        
-        // Calculate absolute position
-        const absolutePosition = {
-          x: blocks[loopId].position.x + constrainedX,
-          y: blocks[loopId].position.y + constrainedY
-        };
+        }      
         
         logger.info('Setting node as child of loop:', {
           nodeId: node.id,
           loopId,
-          relativePosition: { x: constrainedX, y: constrainedY },
-          absolutePosition
+          position: node.position
         });
         
         // Update the parent relationship in the store
@@ -827,7 +800,8 @@ function WorkflowContent() {
             if (n.id === node.id) {
               return {
                 ...n,
-                position: { x: constrainedX, y: constrainedY },
+                // Keep the node's current position
+                position: node.position,
                 parentId: loopId,
                 extent: 'parent' as const
               };
