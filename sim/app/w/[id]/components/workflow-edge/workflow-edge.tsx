@@ -86,7 +86,7 @@ export const WorkflowEdge = ({
           >
             <X className="h-5 w-5 text-red-500 hover:text-red-600" />
           </div>
-        </EdgeLabelRenderer>
+        </EdgeLabelRenderer> 
       )}
     </>
   )

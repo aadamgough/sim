@@ -86,6 +86,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         ...updatedNodes[existingNodeIndex],
         position: relativePosition,
         parentId: id,
+        parentNode: id,
         extent: 'parent' as const
       };
       
@@ -153,52 +154,9 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     }
     
     try {
-      // Get the loop node
-      const loopNode = getNode(id)
-      if (!loopNode) {
-        logger.error('Could not find loop node')
-        return
-      }
-
-      // Get the offset of the loop node's content area (adjust if needed)
-      const loopNodeDOM = document.querySelector(`[data-id="${id}"]`)
-      if (!loopNodeDOM) {
-        logger.error('Could not find loop node DOM element')
-        return
-      }
-      
-      // Get the drop position in client coordinates
-      const clientX = e.clientX
-      const clientY = e.clientY
-      
-      // Get the loop node's content area bounds
-      const contentArea = loopNodeDOM.querySelector('[data-dragarea="true"]')
-      if (!contentArea) {
-        logger.error('Could not find content area in loop node')
-        return
-      }
-      
-      const contentRect = contentArea.getBoundingClientRect()
-      
-      // Calculate drop position relative to the content area in screen coordinates
-      const screenRelativeX = clientX - contentRect.left
-      const screenRelativeY = clientY - contentRect.top
-      
-      // Calculate position relative to the loop node in flow coordinates
-      const relativePosition = {
-        x: screenRelativeX * Number(loopNode.style?.width || 800) / contentRect.width,
-        y: screenRelativeY * Number(loopNode.style?.height || 1000) / contentRect.height
-      }
-      
-      // Ensure the position is within reasonable bounds
-      relativePosition.x = Math.max(50, Math.min(relativePosition.x, Number(loopNode.style?.width || 800)))
-      relativePosition.y = Math.max(50, Math.min(relativePosition.y, Number(loopNode.style?.height || 1000)))
-      
-      // Calculate the absolute position (used for storage)
-      const absolutePosition = {
-        x: loopNode.position.x + relativePosition.x,
-        y: loopNode.position.y + relativePosition.y
-      }
+      // Get the drop position in React-Flow coordinates
+      const clientPoint = { x: e.clientX, y: e.clientY };
+      const flowPoint = screenToFlowPosition(clientPoint);
       
       // Helper function for auto-connecting blocks
       const handleAutoConnect = (targetId: string, pos: { x: number, y: number }) => {
@@ -251,94 +209,40 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       const draggingNodeElement = document.querySelector('[data-drag-data]')
       if (draggingNodeElement) {
         const dragDataStr = draggingNodeElement.getAttribute('data-drag-data')
-        logger.info('Found element with drag data during drop:', {
-          nodeId: draggingNodeElement.getAttribute('data-id'),
-          dragDataStr
-        })
-        
         if (dragDataStr) {
           try {
             const dragData = JSON.parse(dragDataStr)
-            logger.info('Parsed drag data during drop:', { dragData })
-            
             if (dragData.isExistingNode && dragData.id) {
               // Clear the attribute now that we've used it
               draggingNodeElement.removeAttribute('data-drag-data')
-              logger.info('Cleared drag data attribute')
               
               // Process the existing block
               const existingBlockId = dragData.id
-              
               if (existingBlockId && blocks[existingBlockId]) {
-                logger.info('Found existing block in store:', {
-                  blockId: existingBlockId,
-                  blockType: blocks[existingBlockId].type,
-                  blockName: blocks[existingBlockId].name,
-                  blockPos: blocks[existingBlockId].position
-                })
-                
                 // Check if the block is already in a different loop
                 const existingParentId = blocks[existingBlockId].data?.parentId
                 if (existingParentId && existingParentId !== id) {
-                  logger.info('Block already belongs to another parent:', { 
-                    blockId: existingBlockId,
-                    currentParent: existingParentId,
-                    targetParent: id
-                  })
-                  
-                  // If we decide to allow moving between parents, we'd need to first remove
-                  // it from the original parent before adding to the new one
-                  // For now, let's avoid this complexity
                   return
                 }
                 
-                logger.info('Updating existing dragged block:', { 
-                  blockId: existingBlockId,
-                  relativePosition,
-                  absolutePosition,
-                  newParentId: id
-                })
-                
-                // Use the dedicated function to update parent ID, which handles all the position calculations
-                logger.info('Calling updateParentId from drop handler:', {
-                  blockId: existingBlockId,
-                  parentId: id,
-                  extent: 'parent'
-                })
+                // Update parent relationship
                 updateParentId(existingBlockId, id, 'parent')
-                
-                // Refresh the ReactFlow node after a delay to ensure store updates are complete
-                setTimeout(() => {
-                  refreshReactFlowNodesWithCorrectParentage(existingBlockId);
-                }, 100);
                 
                 // Handle auto-connect if enabled
                 const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
                 if (isAutoConnectEnabled) {
-                  logger.info('Auto-connecting block in loop')
-                  handleAutoConnect(existingBlockId, relativePosition);
+                  handleAutoConnect(existingBlockId, flowPoint)
                 }
-                
-                return;
-              } else {
-                logger.warn('Block from drag data not found in store:', {
-                  blockId: existingBlockId,
-                  availableBlockIds: Object.keys(blocks)
-                })
+                return
               }
             }
           } catch (parseErr) {
-            logger.error('Error parsing drag data:', { parseErr, dragDataStr });
+            logger.error('Error parsing drag data:', { parseErr, dragDataStr })
           }
         }
-      } else {
-        logger.info('No element with drag-data found during drop')
       }
       
       // Try to get block data from dataTransfer
-      let targetBlockId: string | undefined;
-      
-      // If there was no drag-data, try to get the block data from the drag event
       const rawData = e.dataTransfer.getData('application/json')
       if (!rawData) {
         logger.error('No data found in drop event')
@@ -353,88 +257,33 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         return
       }
 
-      // Check if this is an existing block being moved
-      const existingBlockId = data.id
-      targetBlockId = existingBlockId
-
-      if (existingBlockId && blocks[existingBlockId]) {
-        // Check if the block is already in a different loop
-        const existingParentId = blocks[existingBlockId].data?.parentId
-        if (existingParentId && existingParentId !== id) {
-          logger.info('Block already belongs to another parent:', { 
-            blockId: existingBlockId,
-            currentParent: existingParentId,
-            targetParent: id
-          })
-          
-          // If we decide to allow moving between parents, we'd need to first remove
-          // it from the original parent before adding to the new one
-          // For now, let's avoid this complexity
-          return
-        }
-        
-        logger.info('Updating existing block:', { 
-          blockId: existingBlockId,
-          relativePosition,
-          absolutePosition
-        })
-        
-        // Use the dedicated function to update parent ID, which handles all the position calculations
-        updateParentId(existingBlockId, id, 'parent')
-
-        // Refresh the ReactFlow node after a delay to ensure store updates are complete
-        setTimeout(() => {
-          refreshReactFlowNodesWithCorrectParentage(existingBlockId);
-        }, 100);
-      } else {
-        // Create a new block from the toolbar item that was dragged
-        logger.info('Creating new block from drag:', { type, position: absolutePosition })
-        
-        const blockConfig = getBlock(type)
-        if (!blockConfig) {
-          logger.error('Invalid block type:', { type })
-          return
-        }
-        
-        const blockId = crypto.randomUUID()
-        const name = `${blockConfig.name} ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
-        
-        // Add the block with parent information
-        addBlock(blockId, type, name, absolutePosition, {
-          parentId: id,
-          extent: 'parent' as const
-        })
-        
-        targetBlockId = blockId
-        
-        // Update React Flow nodes to make sure the new node is properly positioned
-        setTimeout(() => {
-          setNodes((nds) => {
-            const newNodeIndex = nds.findIndex(node => node.id === blockId)
-            if (newNodeIndex !== -1) {
-              const updatedNodes = [...nds]
-              updatedNodes[newNodeIndex] = {
-                ...updatedNodes[newNodeIndex],
-                position: relativePosition,
-              }
-              return updatedNodes
-            }
-            return nds
-          })
-        }, 50)
+      // Create a new block from the toolbar item that was dragged
+      const blockConfig = getBlock(type)
+      if (!blockConfig) {
+        logger.error('Invalid block type:', { type })
+        return
       }
-
+      
+      const blockId = crypto.randomUUID()
+      const name = `${blockConfig.name} ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
+      
+      // Add the block with parent information and let ReactFlow handle positioning
+      addBlock(blockId, type, name, flowPoint, {
+        parentId: id,
+        extent: 'parent' as const
+      })
+      
       // Handle auto-connect for new blocks
       const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
-      if (isAutoConnectEnabled && targetBlockId) {
-        handleAutoConnect(targetBlockId, relativePosition);
+      if (isAutoConnectEnabled) {
+        handleAutoConnect(blockId, flowPoint)
       }
     } catch (err) {
       logger.error('Error handling drop on loop node:', { err })
     } finally {
       setIsValidDragOver(false)
     }
-  }, [id, screenToFlowPosition, addEdge, getNodes, setNodes, blocks, addBlock, updateParentId, refreshReactFlowNodesWithCorrectParentage])
+  }, [id, screenToFlowPosition, addEdge, getNodes, blocks, addBlock, updateParentId])
   
   // Set up drag event handlers
   useEffect(() => {

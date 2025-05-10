@@ -151,9 +151,19 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         const deltaX = position.x - currentPosition.x;
         const deltaY = position.y - currentPosition.y;
         
-        // Check if this block is a parent (loop node) and has children that need to be updated
         const isLoopNode = block.type === 'loop';
         const hasParent = block.data?.parentId !== undefined;
+
+        console.log('[WorkflowStore/updateBlockPosition]', {
+          id,
+          blockName: block.name,
+          isLoopNode,
+          hasParent,
+          currentPosition,
+          newPosition: position,
+          deltaX,
+          deltaY,
+        });
         
         // Get the new state with the updated block position
         const newState = {
@@ -167,22 +177,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           edges: [...get().edges],
         };
         
-        // If this is a loop node, update positions of all child nodes
-        if (isLoopNode && (deltaX !== 0 || deltaY !== 0)) {
-          // Find all child blocks that have this loop node as parent
-          Object.entries(get().blocks).forEach(([childId, childBlock]) => {
-            if (childBlock.data?.parentId === id) {
-              // Update the child block's absolute position by the same delta
-              newState.blocks[childId] = {
-                ...childBlock,
-                position: {
-                  x: childBlock.position.x + deltaX,
-                  y: childBlock.position.y + deltaY,
-                },
-              };
-            }
-          });
-        }
+        // No need to update child positions when a loop node moves. Children positions are always relative to their parent.
         
         set(newState);
         // No sync here as this is a frequent operation during dragging
@@ -248,12 +243,26 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         const parentHeight = parentBlock.data?.height || 1000;
         const childWidth = 320; // Approximate width of a block
         const childHeight = 180; // Approximate height of a block
-        
+
+        // Use a much smaller margin than before – 50px gives a little padding but
+        // still lets the child be placed close to the parentʼs top-left corner.
+        const margin = 50;
+
+        // Constrain the relative position so it cannot spill outside the visual bounds.
         const constrainedRelativePosition = {
-          x: Math.max(500, Math.min(relativePosition.x, parentWidth - childWidth)),
-          y: Math.max(500, Math.min(relativePosition.y, parentHeight - childHeight)),
-        };
-        
+          x: Math.max(margin, Math.min(relativePosition.x, parentWidth - childWidth - margin)),
+          y: Math.max(margin, Math.min(relativePosition.y, parentHeight - childHeight - margin)),
+        } as const;
+
+        console.log('[WorkflowStore/updateParentId] Calculated positions', {
+          blockId: id,
+          parentId,
+          absolutePosition,
+          relativePosition,
+          constrainedRelativePosition,
+          parentBounds: { width: parentWidth, height: parentHeight },
+        });
+
         // Recalculate absolute position from constrained relative position
         const constrainedAbsolutePosition = {
           x: parentBlock.position.x + constrainedRelativePosition.x,
