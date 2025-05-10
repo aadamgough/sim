@@ -165,21 +165,32 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           deltaY,
         });
         
-        // Get the new state with the updated block position
-        const newState = {
-          blocks: {
-            ...get().blocks,
-            [id]: {
-              ...block,
-              position,
-            },
+        // Prepare updated blocks map
+        const updatedBlocks: Record<string, any> = {
+          ...get().blocks,
+          [id]: {
+            ...block,
+            position,
           },
-          edges: [...get().edges],
         };
-        
-        // No need to update child positions when a loop node moves. Children positions are always relative to their parent.
-        
-        set(newState);
+
+        // If this is a loop node, propagate the delta to all direct children so
+        // their absolute positions stay in sync with ReactFlowʼs movement.
+        if (isLoopNode) {
+          Object.values(get().blocks).forEach((child) => {
+            if (child.data?.parentId === id) {
+              updatedBlocks[child.id] = {
+                ...child,
+                position: {
+                  x: child.position.x + deltaX,
+                  y: child.position.y + deltaY,
+                },
+              };
+            }
+          });
+        }
+
+        set({ blocks: updatedBlocks as any, edges: [...get().edges] });
         // No sync here as this is a frequent operation during dragging
       },
 
@@ -230,43 +241,10 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           console.warn(`Cannot set parent: Parent block ${parentId} not found`);
           return;
         }
-        
-        // Calculate the block's position relative to the new parent
         const absolutePosition = { ...block.position };
         const relativePosition = {
-          x: absolutePosition.x - parentBlock.position.x,
-          y: absolutePosition.y - parentBlock.position.y,
-        };
-        
-        // Make sure the position stays within reasonable bounds of the parent
-        const parentWidth = parentBlock.data?.width || 800;
-        const parentHeight = parentBlock.data?.height || 1000;
-        const childWidth = 320; // Approximate width of a block
-        const childHeight = 180; // Approximate height of a block
-
-        // Use a much smaller margin than before – 50px gives a little padding but
-        // still lets the child be placed close to the parentʼs top-left corner.
-        const margin = 50;
-
-        // Constrain the relative position so it cannot spill outside the visual bounds.
-        const constrainedRelativePosition = {
-          x: Math.max(margin, Math.min(relativePosition.x, parentWidth - childWidth - margin)),
-          y: Math.max(margin, Math.min(relativePosition.y, parentHeight - childHeight - margin)),
-        } as const;
-
-        console.log('[WorkflowStore/updateParentId] Calculated positions', {
-          blockId: id,
-          parentId,
-          absolutePosition,
-          relativePosition,
-          constrainedRelativePosition,
-          parentBounds: { width: parentWidth, height: parentHeight },
-        });
-
-        // Recalculate absolute position from constrained relative position
-        const constrainedAbsolutePosition = {
-          x: parentBlock.position.x + constrainedRelativePosition.x,
-          y: parentBlock.position.y + constrainedRelativePosition.y,
+          x: absolutePosition.x + 400,
+          y: absolutePosition.y + 500
         };
         
         // Update the block with the new parent ID and constrained position
@@ -275,7 +253,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
             ...get().blocks,
             [id]: {
               ...block,
-              position: constrainedAbsolutePosition,
+              position: relativePosition,
               data: {
                 ...block.data,
                 parentId,
@@ -286,6 +264,13 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           edges: [...get().edges],
           loops: { ...get().loops },
         };
+        
+        console.log('[WorkflowStore/updateParentId] Updating with new position:', {
+          blockId: id,
+          newRelativePosition: relativePosition,
+          originalPos: block.position,
+          storeIn: "block.position (not data.position)"
+        });
         
         set(newState);
         pushHistory(set, get, newState, `Set parent for ${block.name}`);

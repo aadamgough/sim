@@ -11,7 +11,7 @@ import { LoopConfigBadges } from './components/loop-config-badges'
 const logger = createLogger('LoopNode')
 
 export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
-  const { getNode, getNodes, setNodes, screenToFlowPosition } = useReactFlow()
+  const { getNodes, setNodes, screenToFlowPosition } = useReactFlow()
   const {
     updateNodeDimensions,
     addBlock,
@@ -140,8 +140,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     logger.info('Drop detected within loop node:', { 
       id, 
       target: (e.target as HTMLElement).className,
-      clientX: e.clientX,
-      clientY: e.clientY,
+      clientX: e.clientX + 180,
+      clientY: e.clientY + 220,
       dataTransferTypes: e.dataTransfer.types,
       hasDataAttribute: !!document.querySelector('[data-drag-data]')
     })
@@ -155,7 +155,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     
     try {
       // Get the drop position in React-Flow coordinates
-      const clientPoint = { x: e.clientX, y: e.clientY };
+      const clientPoint = { x: e.clientX + 180, y: e.clientY + 220};
       const flowPoint = screenToFlowPosition(clientPoint);
       
       // Helper function for auto-connecting blocks
@@ -668,8 +668,8 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
               e.stopPropagation();
               
               // Store the mouse coordinates for use after timeout
-              const clientX = e.clientX;
-              const clientY = e.clientY;
+              const clientX = e.clientX + 180;
+              const clientY = e.clientY + 220;
               const startX = clientX;
               const startY = clientY;
               

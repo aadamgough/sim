@@ -111,6 +111,11 @@ function WorkflowContent() {
 
   // Flag to prevent the integrity-checker from recursively scheduling itself
   const fixingRef = useRef(false)
+  // Track group nodes that are currently being dragged so we can ignore
+  // synthetic child position events that React-Flow emits while the parent
+  // is moving.  This prevents us from overwriting the child positions that
+  // we already updated in the store when the parent moved.
+  const draggingParentsRef = useRef<Set<string>>(new Set())
 
   // Initialize workflow
   useEffect(() => {
@@ -500,6 +505,13 @@ function WorkflowContent() {
           return;
         }
 
+        // If this node has a parent that is currently being dragged, ignore
+        // its synthetic position event.  The parent handler already updated
+        // the childʼs absolute coordinates in the store.
+        if (parentId && draggingParentsRef.current.has(parentId)) {
+          return
+        }
+
         if (parentId && blocks[parentId]) {
           const parentPos = blocks[parentId].position;
           const absolute = {
@@ -662,6 +674,12 @@ function WorkflowContent() {
       return;
     }
     
+    // If we start dragging a group/loop node, remember its id so we can
+    // suppress child position events for the duration of the drag.
+    if (node.type === 'group' || node.type === 'loop') {
+      draggingParentsRef.current.add(node.id)
+    }
+
     // Add drag data to the node's DOM element
     const nodeElement = domUtils.getNodeElement(node.id);
     if (nodeElement) {
@@ -710,27 +728,17 @@ function WorkflowContent() {
         // Update the parent relationship
         updateParentId(node.id, loopId, 'parent');
         
-        // Update ReactFlow node position
-        reactFlowInstance.setNodes(nodes => 
-          nodes.map(n => {
-            if (n.id === node.id) {
-              return {
-                ...n,
-                position: node.position,
-                parentId: loopId,
-                parentNode: loopId,
-                extent: 'parent' as const
-              };
-            }
-            return n;
-          })
-        );
         break;
       }
     }
     
     // Clean up any leftover drag data
     domUtils.clearDragData(nodeElement);
+
+    // Clear the dragging flag for group/loop nodes
+    if (node.type === 'group' || node.type === 'loop') {
+      draggingParentsRef.current.delete(node.id)
+    }
   }, [reactFlowInstance, updateParentId]);
 
   // Simplified node drag handler for visual feedback
