@@ -22,7 +22,6 @@ import { initializeSyncManagers, isSyncInitialized } from '@/stores/sync-registr
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 import { useSubBlockStore } from '@/stores/workflows/subblock/store'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
-import { Position } from '@/stores/workflows/workflow/types'
 import { NotificationList } from '@/app/w/[id]/components/notifications/notifications'
 import { getBlock } from '@/blocks'
 import { ControlBar } from './components/control-bar/control-bar'
@@ -294,10 +293,9 @@ function WorkflowContent() {
       if (block.type === 'loop') {
         nodeArray.push({
           id: block.id,
-          type: 'group',
+          type: 'loop',
           position: block.position,
           positionAbsolute: { x: block.position.x, y: block.position.y },
-          dragHandle: '.workflow-drag-handle',
           style: {
             width: block.data?.width || 800,
             height: block.data?.height || 1000,
@@ -348,7 +346,6 @@ function WorkflowContent() {
           type: 'workflowBlock',
           position: relativePosition,
           draggable: true,
-          // Remove dragHandle for child nodes to make the entire node draggable
           extent: 'parent',
           parentId,
           data: {
@@ -357,7 +354,8 @@ function WorkflowContent() {
             name: block.name,
             isActive,
             isPending,
-            _relativePosition: relativePosition,
+            _relativePosition: {...relativePosition},
+            _absolutePosition: {...block.position},
             parentId,
             extent: 'parent',
             isChildNode: true
@@ -372,7 +370,6 @@ function WorkflowContent() {
         type: 'workflowBlock',
         position: block.position,
         draggable: true,
-        dragHandle: '.workflow-drag-handle',
         data: {
           type: block.type,
           config: blockConfig,
@@ -404,96 +401,65 @@ function WorkflowContent() {
     }
   }, [nodes]);
 
-  /* ------------------------------------------------------------------
-   *  Integrity checker – keeps child nodes consistent with store data.
-   * ------------------------------------------------------------------ */
-  // const ensureChildIntegrity = useCallback(() => {
-  //   // Skip integrity checks during parent node drags to prevent position conflicts
-  //   // or when handling edge selection
-  //   if (draggingParentsRef.current.size > 0 || isHandlingEdgeSelection.current) {
-  //     return;
-  //   }
+  // Force Parent-Child Consistency - ensures child nodes maintain correct positions
+  const ensureChildPositions = useCallback(() => {
+    if (isHandlingEdgeSelection.current) return;
     
-  //   const fixes: any[] = []
-  //   const nodesSnapshot = getNodes()
+    const allNodes = getNodes();
+    const parentNodes = allNodes.filter(node => node.type === 'loop');
+    const childNodes = allNodes.filter(node => node.parentId);
     
-  //   // Create set of nodes that are actively being dragged
-  //   const draggedNodeIds = new Set<string>();
-  //   document.querySelectorAll('.react-flow__node.react-flow__node--dragging').forEach(node => {
-  //     const nodeId = node.getAttribute('data-id');
-  //     if (nodeId) draggedNodeIds.add(nodeId);
-  //   });
-
-  //   nodesSnapshot.forEach((n) => {
-  //     // Skip nodes that are currently being dragged by the user
-  //     if (draggedNodeIds.has(n.id)) {
-  //       return;
-  //     }
-      
-  //     const storeBlock = blocks[n.id]
-  //     const expectedParent = storeBlock?.data?.parentId
-
-  //     // Root & group nodes — absolute must equal their own position
-  //     if (!expectedParent) {
-  //       const correctAbs = { x: n.position.x, y: n.position.y }
-  //       if (!n.positionAbsolute || Math.abs(n.positionAbsolute.x - correctAbs.x) > 0.1) {
-  //         fixes.push({ id: n.id, parentId: undefined, correctAbs })
-  //       }
-  //       return
-  //     }
-
-  //     // Child nodes
-  //     const parentBlock = blocks[expectedParent]
-  //     if (!parentBlock) return
-
-  //     if (!n.positionAbsolute) {
-  //       // React Flow hasn't assigned absolute yet; skip this iteration.
-  //       return;
-  //     }
-
-  //     const correctAbs = {
-  //       x: parentBlock.position.x + n.position.x,
-  //       y: parentBlock.position.y + n.position.y,
-  //     }
-
-  //     const lostParent = n.parentId !== expectedParent
-  //     const absWrong = !n.positionAbsolute || Math.abs(n.positionAbsolute.x - correctAbs.x) > 0.1
-
-  //     if (lostParent || absWrong) {
-  //       fixes.push({ id: n.id, parentId: expectedParent, correctAbs })
-  //     }
-  //   })
+    if (childNodes.length === 0) return;
     
-  //   if (fixes.length && !fixingRef.current) {
-  //     fixingRef.current = true
-  //     logger.warn(`Integrity-check: fixing ${fixes.length} child nodes`, { fixes })
-
-  //     // Apply fixes directly, without requestAnimationFrame
-  //     reactFlowInstance.setNodes((nds) =>
-  //       nds.map((node) => {
-  //         const f = fixes.find((fx) => fx.id === node.id)
-  //         if (!f) return node
-  //         if (!f.parentId) {
-  //           updateBlockPosition(f.id, f.correctAbs) // keep store & RF in sync
-  //           return { ...node, position: f.correctAbs, positionAbsolute: f.correctAbs }
-  //         }
-  //         return {
-  //           ...node,
-  //           parentId: f.parentId ?? undefined,
-  //           extent: f.parentId ? ('parent' as const) : undefined,
-  //           positionAbsolute: f.correctAbs,
-  //           data: { ...node.data, parentId: f.parentId, _absolutePosition: f.correctAbs },
-  //         }
-  //       }),
-  //     )
+    // Build parent position map
+    const parentPositions: Record<string, { x: number; y: number }> = {};
+    parentNodes.forEach(parent => {
+      parentPositions[parent.id] = parent.position;
+    });
+    
+    // Check and fix child nodes
+    let needsFix = false;
+    const fixedNodes = childNodes.map(child => {
+      const parentId = child.parentId as string;
+      const parentPos = parentPositions[parentId];
+      if (!parentPos) return child;
       
-  //     // Update positions in store
-  //     fixes.forEach((f) => updateBlockPosition(f.id, f.correctAbs))
+      // Get stored positions from the store
+      const storeBlock = blocks[child.id];
+      if (!storeBlock?.data) return child;
       
-  //     // Release lock after update
-  //     fixingRef.current = false
-  //   }
-  // }, [getNodes, blocks, reactFlowInstance, updateBlockPosition])
+      // Get expected relative position
+      const expectedRelPos = storeBlock.data._relativePosition || {
+        x: storeBlock.position.x - blocks[parentId].position.x,
+        y: storeBlock.position.y - blocks[parentId].position.y
+      };
+      
+      // Check if current position matches expected
+      if (Math.abs(child.position.x - expectedRelPos.x) > 0.1 ||
+          Math.abs(child.position.y - expectedRelPos.y) > 0.1) {
+        needsFix = true;
+        return {
+          ...child,
+          position: { ...expectedRelPos },
+          positionAbsolute: {
+            x: parentPos.x + expectedRelPos.x,
+            y: parentPos.y + expectedRelPos.y
+          }
+        };
+      }
+      
+      return child;
+    });
+    
+    if (needsFix) {
+      // Apply position fixes
+      logger.info('Fixing child node positions that drifted from expected values');
+      reactFlowInstance.setNodes(nodes => {
+        const nonChildNodes = nodes.filter(n => !n.parentId);
+        return [...nonChildNodes, ...fixedNodes];
+      });
+    }
+  }, [blocks, getNodes, reactFlowInstance]);
 
   // Simplified onNodesChange handler
   const onNodesChange = useCallback(
@@ -703,7 +669,7 @@ function WorkflowContent() {
   // Simplified node drag start handler
   const onNodeDragStart = useCallback((event: React.MouseEvent, node: any) => {
     // If we start dragging a group/loop node, remember its id
-    if (node.type === 'group' || node.type === 'loop') {
+    if (node.type === 'loop') {
       draggingParentsRef.current.add(node.id)
       return;
     }
@@ -739,7 +705,7 @@ function WorkflowContent() {
     }
     
     // Skip group/loop nodes and starter blocks
-    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop') {
+    if (node.data?.type === 'starter' || node.type === 'loop') { //removed node.type === 'group'
       return;
     }
     
@@ -788,7 +754,7 @@ function WorkflowContent() {
     }
     
     // Skip group/loop nodes and starter blocks
-    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop') {
+    if (node.data?.type === 'starter' || node.type === 'loop') { //removed node.type === 'group'
       return;
     }
 
@@ -829,7 +795,7 @@ function WorkflowContent() {
     domUtils.clearDragData(nodeElement);
 
     // Clear the dragging flag for group/loop nodes
-    if (node.type === 'group' || node.type === 'loop') {
+    if ( node.type === 'loop') { //removed node.type === 'group'
       draggingParentsRef.current.delete(node.id)
     }
   }, [updateParentId]);
@@ -906,67 +872,100 @@ function WorkflowContent() {
   const onConnect = useCallback(
     (connection: any) => {
       if (connection.source && connection.target) {
-        // Set flag to prevent position recalculation during edge creation
+        // 1. First, capture current state before we do anything
+        const allNodes = getNodes();
+        const childNodeMap = new Map();
+        
+        // Capture ALL nodes with their parents and positions
+        allNodes.forEach(node => {
+          if (node.parentId) {
+            const parentNode = allNodes.find(p => p.id === node.parentId);
+            if (parentNode) {
+              childNodeMap.set(node.id, {
+                childId: node.id,
+                childPosition: { ...node.position },
+                parentId: node.parentId,
+                parentPosition: { ...parentNode.position }
+              });
+            }
+          }
+        });
+        
+        // 2. Set the flag to indicate we're handling edge operation
         isHandlingEdgeSelection.current = true;
         
-        // Capture current positions of all child nodes before adding edge
-        const childNodes = getNodes().filter(node => node.parentId);
-        const childPositions = childNodes.reduce((acc, node) => {
-          acc[node.id] = {
-            position: { ...node.position },
-            positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : undefined,
-            parentId: node.parentId
-          };
-          return acc;
-        }, {} as Record<string, any>);
+        // 3. Calculate expected absolute positions for all child nodes
+        const expectedPositions = new Map();
+        childNodeMap.forEach((info, nodeId) => {
+          expectedPositions.set(nodeId, {
+            absolute: {
+              x: info.parentPosition.x + info.childPosition.x,
+              y: info.parentPosition.y + info.childPosition.y
+            },
+            relative: { ...info.childPosition }
+          });
+        });
         
-        // Add the edge
+        // 4. Add the edge - this will trigger ReactFlow's rerender
         addEdge({
           ...connection,
           id: crypto.randomUUID(),
           type: 'workflowEdge',
         });
         
-        // After a brief moment, verify child positions haven't changed
-        setTimeout(() => {
-          // Check for position changes
+        // 5. Run an immediate position check/correction
+        queueMicrotask(() => {
+          // Get nodes post-edge addition to see what changed
           const updatedNodes = getNodes();
-          let needsFixing = false;
+          let positionsFixed = 0;
           
-          updatedNodes.forEach(node => {
-            const saved = childPositions[node.id];
-            if (saved && node.parentId) {
-              // Check if position changed significantly
-              if (
-                !node.positionAbsolute ||
-                Math.abs((node.positionAbsolute.x - (saved.positionAbsolute?.x || 0))) > 0.1 ||
-                Math.abs((node.positionAbsolute.y - (saved.positionAbsolute?.y || 0))) > 0.1
-              ) {
-                needsFixing = true;
+          // Fix any nodes that lost their proper positioning
+          reactFlowInstance.setNodes(nodes => 
+            nodes.map(node => {
+              // Only process child nodes
+              if (!node.parentId) return node;
+              
+              const expectedPos = expectedPositions.get(node.id);
+              if (!expectedPos) return node;
+              
+              // Find the current parent node
+              const parentNode = updatedNodes.find(p => p.id === node.parentId);
+              if (!parentNode) return node;
+              
+              // Check if position is significantly different from expected
+              if (Math.abs(node.position.x - expectedPos.relative.x) > 0.1 || 
+                  Math.abs(node.position.y - expectedPos.relative.y) > 0.1) {
+                
+                positionsFixed++;
+                // Log detailed fix information
+                logger.info(`Fixing child node ${node.id} position during edge creation`, {
+                  current: node.position,
+                  expected: expectedPos.relative,
+                  parentId: node.parentId
+                });
+                
+                // Return fixed node
+                return {
+                  ...node,
+                  position: { ...expectedPos.relative },
+                  positionAbsolute: {
+                    x: parentNode.position.x + expectedPos.relative.x,
+                    y: parentNode.position.y + expectedPos.relative.y
+                  }
+                };
               }
-            }
-          });
+              
+              return node;
+            })
+          );
           
-          // If positions changed, restore them
-          if (needsFixing) {
-            logger.info('Fixing child positions after edge creation');
-            reactFlowInstance.setNodes(nodes => 
-              nodes.map(node => {
-                const saved = childPositions[node.id];
-                if (saved && node.parentId) {
-                  return {
-                    ...node,
-                    positionAbsolute: saved.positionAbsolute,
-                  };
-                }
-                return node;
-              })
-            );
+          if (positionsFixed > 0) {
+            logger.info(`Fixed positions for ${positionsFixed} child nodes during edge creation`);
           }
           
-          // Reset flag after ReactFlow has processed the change
+          // Clear flag after position fixes
           isHandlingEdgeSelection.current = false;
-        }, 50);
+        });
       }
     },
     [addEdge, getNodes, reactFlowInstance]
@@ -1011,66 +1010,99 @@ function WorkflowContent() {
 
   // Update onEdgeClick to properly handle edge selection without affecting child positions
   const onEdgeClick = useCallback((event: React.MouseEvent, edge: any) => {
-    // Set flag to prevent position recalculation during edge selection
+    event.stopPropagation();
+    
+    // 1. First, capture current state before we do anything
+    const allNodes = getNodes();
+    const childNodeMap = new Map();
+    
+    // Capture ALL nodes with their parents and positions
+    allNodes.forEach(node => {
+      if (node.parentId) {
+        const parentNode = allNodes.find(p => p.id === node.parentId);
+        if (parentNode) {
+          childNodeMap.set(node.id, {
+            childId: node.id,
+            childPosition: { ...node.position },
+            parentId: node.parentId,
+            parentPosition: { ...parentNode.position }
+          });
+        }
+      }
+    });
+    
+    // 2. Set the flag to indicate we're handling edge selection
     isHandlingEdgeSelection.current = true;
+    
+    // 3. Calculate expected absolute positions for all child nodes
+    const expectedPositions = new Map();
+    childNodeMap.forEach((info, nodeId) => {
+      expectedPositions.set(nodeId, {
+        absolute: {
+          x: info.parentPosition.x + info.childPosition.x,
+          y: info.parentPosition.y + info.childPosition.y
+        },
+        relative: { ...info.childPosition }
+      });
+    });
+    
+    // 4. Update selected edge - this will trigger ReactFlow's rerender
     setSelectedEdgeId(edge.id);
     
-    // Force a snapshot of current positions before selection changes anything
-    const currentNodes = getNodes();
-    const childNodes = currentNodes.filter(node => node.parentId);
-    
-    // Store current positions of all child nodes to reapply if needed
-    const childPositions = childNodes.reduce((acc, node) => {
-      acc[node.id] = {
-        position: { ...node.position },
-        positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : undefined,
-        parentId: node.parentId
-      };
-      return acc;
-    }, {} as Record<string, any>);
-    
-    // After React Flow has processed the selection, verify positions
-    setTimeout(() => {
-      // Check if any child node positions changed during edge selection
+    // 5. Run an immediate position check/correction
+    queueMicrotask(() => {
+      // Get nodes post-selection to see what changed
       const updatedNodes = getNodes();
-      let needsFixing = false;
+      let positionsFixed = 0;
       
-      updatedNodes.forEach(node => {
-        const saved = childPositions[node.id];
-        if (saved && node.parentId) {
-          // Check if position changed significantly
-          if (
-            !node.positionAbsolute ||
-            Math.abs((node.positionAbsolute.x - (saved.positionAbsolute?.x || 0))) > 0.1 ||
-            Math.abs((node.positionAbsolute.y - (saved.positionAbsolute?.y || 0))) > 0.1
-          ) {
-            needsFixing = true;
+      // Fix any nodes that lost their proper positioning
+      reactFlowInstance.setNodes(nodes => 
+        nodes.map(node => {
+          // Only process child nodes
+          if (!node.parentId) return node;
+          
+          const expectedPos = expectedPositions.get(node.id);
+          if (!expectedPos) return node;
+          
+          // Find the current parent node
+          const parentNode = updatedNodes.find(p => p.id === node.parentId);
+          if (!parentNode) return node;
+          
+          // Check if position is significantly different from expected
+          if (Math.abs(node.position.x - expectedPos.relative.x) > 0.1 || 
+              Math.abs(node.position.y - expectedPos.relative.y) > 0.1) {
+            
+            positionsFixed++;
+            // Log detailed fix information
+            logger.info(`Fixing child node ${node.id} position during edge selection`, {
+              current: node.position,
+              expected: expectedPos.relative,
+              parentId: node.parentId
+            });
+            
+            // Return fixed node
+            return {
+              ...node,
+              position: { ...expectedPos.relative },
+              positionAbsolute: {
+                x: parentNode.position.x + expectedPos.relative.x,
+                y: parentNode.position.y + expectedPos.relative.y
+              }
+            };
           }
-        }
-      });
+          
+          return node;
+        })
+      );
       
-      // If positions changed, restore them
-      if (needsFixing) {
-        logger.info('Fixing child positions after edge selection');
-        reactFlowInstance.setNodes(nodes => 
-          nodes.map(node => {
-            const saved = childPositions[node.id];
-            if (saved && node.parentId) {
-              // Restore original position
-              return {
-                ...node,
-                positionAbsolute: saved.positionAbsolute,
-              };
-            }
-            return node;
-          })
-        );
+      if (positionsFixed > 0) {
+        logger.info(`Fixed positions for ${positionsFixed} child nodes during edge selection`);
       }
       
-      // Clear the flag after handling
+      // Clear flag after position fixes
       isHandlingEdgeSelection.current = false;
-    }, 50);
-  }, [getNodes, reactFlowInstance]);
+    });
+  }, [getNodes, reactFlowInstance, setSelectedEdgeId]);
 
   // Keyboard shortcuts: delete selected edge
   useEffect(() => {
@@ -1095,6 +1127,35 @@ function WorkflowContent() {
     window.addEventListener('update-subblock-value', handler as EventListener)
     return () => window.removeEventListener('update-subblock-value', handler as EventListener)
   }, [setSubBlockValue])
+
+  // Run position checks periodically to ensure child nodes stay in correct positions
+  useEffect(() => {
+    // Skip position checks if there are no loop nodes
+    const hasLoopNodes = Object.values(blocks).some(block => block.type === 'loop');
+    if (!hasLoopNodes) return;
+    
+    // Check positions after any operation that might affect them
+    const checkPositionsAfterUserAction = () => {
+      if (!isHandlingEdgeSelection.current) {
+        ensureChildPositions();
+      }
+    };
+    
+    // Set up listeners for operations that might disrupt positions
+    window.addEventListener('mouseup', checkPositionsAfterUserAction);
+    
+    // Periodic check as an additional safety measure
+    const intervalId = setInterval(() => {
+      if (!isHandlingEdgeSelection.current) {
+        ensureChildPositions();
+      }
+    }, 2000); // Check every 2 seconds
+    
+    return () => {
+      window.removeEventListener('mouseup', checkPositionsAfterUserAction);
+      clearInterval(intervalId);
+    };
+  }, [blocks, ensureChildPositions]);
 
   if (!isInitialized) {
     return (

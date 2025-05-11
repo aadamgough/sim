@@ -138,8 +138,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         const block = get().blocks[id];
         if (!block) return;
         
-        // Skip update if the position hasn't changed significantly
-        // This prevents unnecessary renders and potential jumping
+        // Skip update if position hasn't changed significantly
         const currentPosition = block.position;
         const positionChanged = 
           Math.abs(currentPosition.x - position.x) > 0.1 || 
@@ -154,45 +153,48 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         const isLoopNode = block.type === 'loop';
         const hasParent = block.data?.parentId !== undefined;
 
-        console.log('[WorkflowStore/updateBlockPosition]', {
-          id,
-          blockName: block.name,
-          isLoopNode,
-          hasParent,
-          currentPosition,
-          newPosition: position,
-          deltaX,
-          deltaY,
-        });
-        
         // Prepare updated blocks map
-        const updatedBlocks: Record<string, any> = {
+        const updatedBlocks = {
           ...get().blocks,
           [id]: {
             ...block,
-            position,
+            position, // Store absolute position
+            data: {
+              ...block.data,
+              _absolutePosition: { ...position } // Also store in data for recovery
+            }
           },
         };
 
-        // If this is a loop node, propagate the delta to all direct children so
-        // their absolute positions stay in sync with ReactFlowʼs movement.
+        // Update child nodes with both absolute and relative positions
         if (isLoopNode) {
           Object.values(get().blocks).forEach((child) => {
             if (child.data?.parentId === id) {
+              const childRelativePos = {
+                x: child.position.x - currentPosition.x,
+                y: child.position.y - currentPosition.y
+              };
+              
               updatedBlocks[child.id] = {
                 ...child,
                 position: {
-                  x: child.position.x + deltaX,
-                  y: child.position.y + deltaY,
+                  x: position.x + childRelativePos.x,
+                  y: position.y + childRelativePos.y,
                 },
+                data: {
+                  ...child.data,
+                  _relativePosition: childRelativePos,
+                  _absolutePosition: {
+                    x: position.x + childRelativePos.x,
+                    y: position.y + childRelativePos.y,
+                  }
+                }
               };
             }
           });
-          console.log('Child node positions updated:', updatedBlocks)
         }
 
-        set({ blocks: updatedBlocks as any, edges: [...get().edges] });
-        // No sync here as this is a frequent operation during dragging
+        set({ blocks: updatedBlocks as any });
       },
 
       updateNodeDimensions: (id: string, dimensions: { width: number; height: number }) => {
