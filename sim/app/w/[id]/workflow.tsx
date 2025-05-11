@@ -455,12 +455,15 @@ function WorkflowContent() {
       fixingRef.current = true
       logger.warn(`Integrity-check: fixing ${fixes.length} child nodes`, { fixes })
 
+      // First update positions in the store to ensure consistency
+      fixes.forEach((f) => updateBlockPosition(f.id, f.correctAbs))
+      
+      // Then update the ReactFlow nodes
       reactFlowInstance.setNodes((nds) =>
         nds.map((node) => {
           const f = fixes.find((fx) => fx.id === node.id)
           if (!f) return node
           if (!f.parentId) {
-            updateBlockPosition(f.id, f.correctAbs) // keep store & RF in sync
             return { ...node, position: f.correctAbs, positionAbsolute: f.correctAbs }
           }
           return {
@@ -472,9 +475,9 @@ function WorkflowContent() {
           }
         }),
       )
-      fixes.forEach((f) => updateBlockPosition(f.id, f.correctAbs))
-      // release the lock after ReactFlow applies the update
-      requestAnimationFrame(() => { fixingRef.current = false })
+      
+      // Release the lock immediately after applying updates
+      fixingRef.current = false
     }
   }, [getNodes, blocks, reactFlowInstance, updateBlockPosition])
 
@@ -485,44 +488,90 @@ function WorkflowContent() {
 
       // Track parent nodes being moved in this batch
       const movedParentIds = new Set<string>();
+      const movedParentPositions = new Map();
       
+      // First pass: identify all moved parent nodes and their new positions
       changes.forEach((c: any) => {
-        if (c.type === 'position') {
+        if (c.type === 'position' && c.position) {
           const blk = blocks[c.id];
-          if (blk?.type === 'loop') {
+          if (!blk) return;
+          
+          if (blk.type === 'loop') {
             movedParentIds.add(c.id);
+            movedParentPositions.set(c.id, c.position);
             draggingParentsRef.current.add(c.id);
           }
         }
       });
+      
+      // If we're handling edge selection, skip the entire position update
+      if (isHandlingEdgeSelection.current) {
+        return;
+      }
 
-      // Process position changes for parent nodes first
+      // Prepare updated blocks map
+      const updatedBlocks: Record<string, any> = { ...blocks };
+      
+      // Process all position changes
       changes.forEach((change: any) => {
         if (change.type !== 'position' || !change.position) return;
 
         const block = blocks[change.id];
         if (!block) return;
         
-        // Only process parent nodes or nodes without parents here
         const parentId = block.data?.parentId;
-        if (parentId) {
-          // Skip child nodes that will be moved by the updateBlockPosition logic
-          if (movedParentIds.has(parentId)) {
-            return;
-          }
+        
+        // First update the parent block positions
+        if (!parentId && movedParentIds.has(change.id)) {
+          const newPosition = change.position;
+          const oldPosition = block.position;
+          updatedBlocks[change.id] = {
+            ...block,
+            position: newPosition,
+          };
           
-          // For child nodes with stationary parents, calculate correct absolute position
+          // Calculate position delta
+          const deltaX = newPosition.x - oldPosition.x;
+          const deltaY = newPosition.y - oldPosition.y;
+          
+          // Immediately update all child positions for this parent
+          Object.values(blocks).forEach((childBlock: any) => {
+            if (childBlock.data?.parentId === change.id) {
+              // Preserve the relative position but update the absolute position
+              const childId = childBlock.id;
+              updatedBlocks[childId] = {
+                ...childBlock,
+                position: {
+                  x: childBlock.position.x + deltaX,
+                  y: childBlock.position.y + deltaY,
+                },
+              };
+            }
+          });
+        } 
+        // Only update non-loop child nodes that have stationary parents
+        else if (parentId && !movedParentIds.has(parentId)) {
           const parentPos = blocks[parentId].position;
           const absolute = {
             x: parentPos.x + change.position.x,
             y: parentPos.y + change.position.y,
           };
-          updateBlockPosition(change.id, absolute);
-        } else {
-          // Handle parent nodes or independent nodes
-          updateBlockPosition(change.id, change.position);
+          updatedBlocks[change.id] = {
+            ...block,
+            position: absolute,
+          };
+        }
+        // Handle independent blocks with no parent
+        else if (!parentId) {
+          updatedBlocks[change.id] = {
+            ...block,
+            position: change.position,
+          };
         }
       });
+      
+      // Update the store with all position changes at once
+      useWorkflowStore.setState({ blocks: updatedBlocks, edges: [...useWorkflowStore.getState().edges] });
       
       // Release the dragging parents lock after a short delay
       if (movedParentIds.size > 0) {
@@ -532,11 +581,8 @@ function WorkflowContent() {
           });
         }, 100);
       }
-
-      // Validate after React-Flow applies its internal state
-      requestAnimationFrame(ensureChildIntegrity);
     },
-    [blocks, updateBlockPosition, ensureChildIntegrity],
+    [blocks],
   );
 
   // Update the onDrop handler
@@ -869,6 +915,14 @@ function WorkflowContent() {
         // Set flag to prevent position recalculation during edge creation
         isHandlingEdgeSelection.current = true;
         
+        // Capture current positions of all child nodes before making changes
+        const childPositions = new Map();
+        Object.entries(blocks).forEach(([blockId, block]) => {
+          if (block.data?.parentId) {
+            childPositions.set(blockId, { ...block.position });
+          }
+        });
+        
         // Add the edge
         addEdge({
           ...connection,
@@ -876,13 +930,34 @@ function WorkflowContent() {
           type: 'workflowEdge',
         });
 
-        // Reset flag after a short delay to allow ReactFlow to process the change
+        // Reset flag after a longer delay to ensure ReactFlow has completed processing
         setTimeout(() => {
+          // Verify child positions are maintained
+          Object.entries(blocks).forEach(([blockId, block]) => {
+            if (block.data?.parentId && childPositions.has(blockId)) {
+              const originalPos = childPositions.get(blockId);
+              const parentPos = blocks[block.data.parentId].position;
+              const absolutePos = {
+                x: parentPos.x + block.position.x,
+                y: parentPos.y + block.position.y
+              };
+              
+              // If absolute position changed significantly, restore it
+              if (Math.abs(absolutePos.x - (parentPos.x + originalPos.x)) > 0.1 ||
+                  Math.abs(absolutePos.y - (parentPos.y + originalPos.y)) > 0.1) {
+                updateBlockPosition(blockId, {
+                  x: parentPos.x + originalPos.x,
+                  y: parentPos.y + originalPos.y
+                });
+              }
+            }
+          });
+          
           isHandlingEdgeSelection.current = false;
-        }, 50);
+        }, 150);
       }
     },
-    [addEdge]
+    [addEdge, blocks, updateBlockPosition]
   );
 
   // Update onPaneClick to only handle edge selection
@@ -923,14 +998,19 @@ function WorkflowContent() {
   );
 
   const onEdgeClick = useCallback((event: React.MouseEvent, edge: any) => {
+    // Prevent event bubbling
+    event.stopPropagation();
+    event.preventDefault();
+    
     // Set flag to prevent position recalculation during edge selection
     isHandlingEdgeSelection.current = true;
     setSelectedEdgeId(edge.id);
     
     // Reset flag after ReactFlow has processed the selection
+    // Use a longer timeout to ensure the selection is fully processed
     setTimeout(() => {
       isHandlingEdgeSelection.current = false;
-    }, 50);
+    }, 150); // Increased from 50ms to give more time
   }, []);
 
   // Keyboard shortcuts: delete selected edge
