@@ -118,6 +118,9 @@ function WorkflowContent() {
   // we already updated in the store when the parent moved.
   const draggingParentsRef = useRef<Set<string>>(new Set())
 
+  // Track whether we're currently handling edge selection to prevent unnecessary position fixing
+  const isHandlingEdgeSelection = useRef(false);
+
   // Initialize workflow
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -406,7 +409,8 @@ function WorkflowContent() {
    * ------------------------------------------------------------------ */
   const ensureChildIntegrity = useCallback(() => {
     // Skip integrity checks during parent node drags to prevent position conflicts
-    if (draggingParentsRef.current.size > 0) {
+    // or when handling edge selection
+    if (draggingParentsRef.current.size > 0 || isHandlingEdgeSelection.current) {
       return;
     }
     
@@ -718,7 +722,6 @@ function WorkflowContent() {
 
     // Find all loop nodes and check if this node is over one
     const loopNodes = document.querySelectorAll('.react-flow__node-group');
-    let foundLoop = false;
     
     for (const loopNodeEl of loopNodes) {
       const loopId = loopNodeEl.getAttribute('data-id');
@@ -863,27 +866,8 @@ function WorkflowContent() {
   const onConnect = useCallback(
     (connection: any) => {
       if (connection.source && connection.target) {
-        // Save the current positions of all child nodes before adding the edge
-        const childNodesInfo = getNodes()
-          .filter(node => node.parentId || node.data?.isChildNode)
-          .map(node => {
-            const block = blocks[node.id];
-            const parentId = node.parentId || node.data?.parentId;
-            const parentBlock = parentId ? blocks[parentId] : null;
-            
-            // Calculate the correct absolute position
-            const correctAbsolutePosition = parentBlock ? {
-              x: parentBlock.position.x + node.position.x,
-              y: parentBlock.position.y + node.position.y
-            } : node.positionAbsolute;
-            
-            return {
-              id: node.id,
-              position: { ...node.position },
-              correctAbsolutePosition,
-              parentId
-            };
-          });
+        // Set flag to prevent position recalculation during edge creation
+        isHandlingEdgeSelection.current = true;
         
         // Add the edge
         addEdge({
@@ -891,43 +875,14 @@ function WorkflowContent() {
           id: crypto.randomUUID(),
           type: 'workflowEdge',
         });
-        
-        // Fix positions after adding the edge
-        if (childNodesInfo.length > 0) {
-          requestAnimationFrame(() => {
-            // Check for corrupted nodes
-            const corruptedNodes = getNodes()
-              .filter(node => 
-                node.parentId && 
-                node.positionAbsolute && 
-                Math.abs(node.positionAbsolute.x - node.position.x) < 0.1
-              );
-            
-            if (corruptedNodes.length > 0) {
-              logger.info(`Fixing ${corruptedNodes.length} nodes after connection`);
-              
-              // Update node positions in ReactFlow
-              reactFlowInstance.setNodes(nodes => 
-                nodes.map(node => {
-                  const childInfo = childNodesInfo.find(info => info.id === node.id);
-                  if (!childInfo || !childInfo.correctAbsolutePosition) return node;
-                  
-                  return {
-                    ...node,
-                    positionAbsolute: childInfo.correctAbsolutePosition,
-                    data: {
-                      ...node.data,
-                      _absolutePosition: childInfo.correctAbsolutePosition
-                    }
-                  };
-                })
-              );
-            }
-          });
-        }
+
+        // Reset flag after a short delay to allow ReactFlow to process the change
+        setTimeout(() => {
+          isHandlingEdgeSelection.current = false;
+        }, 50);
       }
     },
-    [addEdge, getNodes, blocks, reactFlowInstance]
+    [addEdge]
   );
 
   // Update onPaneClick to only handle edge selection
@@ -967,117 +922,16 @@ function WorkflowContent() {
     [edges, createEdgeWithCustomDelete]
   );
 
-  // --------------------------------------------------------------
-  // Edge click: log child positions before/after and run integrity
-  // --------------------------------------------------------------
   const onEdgeClick = useCallback((event: React.MouseEvent, edge: any) => {
-    event.stopPropagation()
-    logger.info(`Edge clicked: ${edge.id} (${edge.source} -> ${edge.target})`)
-
-    // Capture current child node state from both ReactFlow and our store
-    const rfChildNodes = getNodes().filter(n => n.parentId)
-    const childNodesMap = new Map()
+    // Set flag to prevent position recalculation during edge selection
+    isHandlingEdgeSelection.current = true;
+    setSelectedEdgeId(edge.id);
     
-    // First collect all actual child nodes from our store
-    Object.entries(blocks).forEach(([id, block]) => {
-      const parentId = block.data?.parentId
-
-      if (parentId) {
-        // block.position is already stored as an absolute coordinate in the
-        // workflow store. We therefore keep it as-is and *do not* add the
-        // parent position again – doing so would over-offset the node and is
-        // exactly what pushed our children far away.
-        childNodesMap.set(id, {
-          id,
-          name: block.name,
-          type: block.type,
-          parentId,
-          position: { ...block.position },
-          absolutePosition: { ...block.position },
-        })
-      }
-    })
-    
-    // Log child state before selection
-    const before = rfChildNodes.map(n => ({ 
-      id: n.id, 
-      name: n.data?.name,
-      parentId: n.parentId, 
-      rel: n.position, 
-      abs: n.positionAbsolute 
-    }))
-    logger.debug('Child snapshot BEFORE selection', before)
-    
-    // Set the selected edge ID
-    setSelectedEdgeId(edge.id)
-
-    // After React Flow updates, ensure all child nodes are present and positioned correctly
-    requestAnimationFrame(() => {
-      // Check what nodes ReactFlow still has
-      const currentRfNodes = getNodes()
-      const afterChildNodes = currentRfNodes.filter(n => n.parentId)
-      
-      const after = afterChildNodes.map(n => ({ 
-        id: n.id, 
-        name: n.data?.name,
-        parentId: n.parentId, 
-        rel: n.position, 
-        abs: n.positionAbsolute 
-      }))
-      logger.debug('Child snapshot AFTER selection', after)
-      
-      // Check for any missing or corrupted nodes
-      const corrupted = afterChildNodes.filter(node => 
-        node.positionAbsolute && 
-        Math.abs(node.positionAbsolute.x - node.position.x) < 0.1
-      )
-      
-      const allNodeIds = new Set(currentRfNodes.map(n => n.id))
-      const missingNodes = Array.from(childNodesMap.values())
-        .filter(node => !allNodeIds.has(node.id))
-      
-      if (corrupted.length > 0 || missingNodes.length > 0) {
-        logger.info(`Fixing nodes after edge selection: ${corrupted.length} corrupted, ${missingNodes.length} missing`)
-        
-        // Generate a new complete set of nodes
-        const updatedNodes = [...currentRfNodes]
-        
-        // Fix corrupted nodes
-        for (let i = 0; i < updatedNodes.length; i++) {
-          const node = updatedNodes[i]
-          console.log('Here is one node in the corrupted nodes list', node)
-          const storedNode = childNodesMap.get(node.id)
-          console.log('Here is the stored node', storedNode)
-          
-          if (storedNode && node.parentId) {
-            // Fix corrupted positions
-            updatedNodes[i] = {
-              ...node,
-              positionAbsolute: storedNode.absolutePosition,
-              data: {
-                ...node.data,
-                _absolutePosition: storedNode.absolutePosition
-              }
-            }
-            console.log('Here is the updated node from the corrupted nodes list', updatedNodes[i])
-          }
-        }
-        // Update all nodes in ReactFlow
-        reactFlowInstance.setNodes(updatedNodes)
-
-        // After applying corrections, run integrity checker once more
-        // to ensure that all absolute / relative positions are synced
-        // between React Flow and the central store. This takes care of
-        // cases where a parent group node was shifted by React Flow
-        // itself (e.g. when selecting an external edge) and therefore
-        // guarantees that the follow-up render uses the right
-        // coordinates.
-        requestAnimationFrame(() => {
-          ensureChildIntegrity();
-        })
-      }
-    })
-  }, [getNodes, blocks, reactFlowInstance, ensureChildIntegrity])
+    // Reset flag after ReactFlow has processed the selection
+    setTimeout(() => {
+      isHandlingEdgeSelection.current = false;
+    }, 50);
+  }, []);
 
   // Keyboard shortcuts: delete selected edge
   useEffect(() => {

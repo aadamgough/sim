@@ -241,12 +241,17 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         // block.position untouched. React Flow will convert this to a
         // relative coordinate every render (see workflow.tsx nodes useMemo).
 
+        const bufferPosition = {
+          x: absolutePosition.x + 400,
+          y: absolutePosition.y + 500
+        }
+
         const newState = {
           blocks: {
             ...get().blocks,
             [id]: {
               ...block,
-              position: absolutePosition,
+              position: bufferPosition,
               data: {
                 ...block.data,
                 parentId,

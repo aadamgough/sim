@@ -25,80 +25,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   // Add state to track hover status
   const [isHovered, setIsHovered] = useState(false)
   
-  // Get loop configuration values for display
-  const loopType = data?.loopType || 'for'
-  const iterations = data?.count || 5
-  
-  // Helper function to refresh ReactFlow nodes when parent-child relationships change
-  const refreshReactFlowNodesWithCorrectParentage = useCallback((targetNodeId: string) => {
-    logger.info('Refreshing ReactFlow nodes to ensure correct parent-child relationships:', { targetNodeId });
-    
-    // Get the current block state
-    const currentBlock = blocks[targetNodeId];
-    if (!currentBlock) {
-      logger.warn('Block not found in store for refresh:', { targetNodeId });
-      return;
-    }
-    
-    // Only proceed if this block should be a child of the loop
-    if (currentBlock.data?.parentId !== id) {
-      logger.warn('Block does not have the expected parent ID:', {
-        blockId: targetNodeId,
-        expectedParentId: id,
-        actualParentId: currentBlock.data?.parentId
-      });
-      return;
-    }
-    
-    // Get the parent node
-    const parentNode = blocks[id];
-    if (!parentNode) {
-      logger.warn('Parent node not found for refresh:', { parentId: id });
-      return;
-    }
-    
-    // Calculate the correct relative position
-    const absolutePosition = currentBlock.position;
-    const relativePosition = {
-      x: absolutePosition.x - parentNode.position.x,
-      y: absolutePosition.y - parentNode.position.y
-    };
-    
-    logger.info('Calculated relative position for child node:', {
-      blockId: targetNodeId,
-      absolutePosition,
-      parentPosition: parentNode.position,
-      relativePosition
-    });
-    
-    // Update the ReactFlow nodes directly
-    setNodes(nodes => {
-      // Find if the node already exists in ReactFlow
-      const existingNodeIndex = nodes.findIndex(n => n.id === targetNodeId);
-      if (existingNodeIndex === -1) {
-        logger.warn('Node not found in ReactFlow for refresh:', { nodeId: targetNodeId });
-        return nodes;
-      }
-      
-      // Update the node with correct parent relationship and position
-      const updatedNodes = [...nodes];
-      updatedNodes[existingNodeIndex] = {
-        ...updatedNodes[existingNodeIndex],
-        position: relativePosition,
-        parentId: id,
-        extent: 'parent' as const
-      };
-      
-      logger.info('Updated ReactFlow node with parent relationship:', {
-        nodeId: targetNodeId,
-        position: relativePosition,
-        parentId: id
-      });
-      
-      return updatedNodes;
-    });
-  }, [id, blocks, setNodes]);
-  
   // Initialize node dimensions from props or defaults
   useEffect(() => {
     // Make sure we have proper width and height set
@@ -108,26 +34,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         width: data.width || 800, 
         height: data.height || 1000 
       })
-      
-      // Also update in ReactFlow directly
-      setNodes(nodes => nodes.map(node => {
-        if (node.id === id) {
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              width: data.width || 800,
-              height: data.height || 1000
-            },
-            style: {
-              ...node.style,
-              width: data.width || 800,
-              height: data.height || 1000
-            }
-          }
-        }
-        return node
-      }))
     }
   }, [id, data, updateNodeDimensions, setNodes])
   
@@ -138,23 +44,14 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     
     logger.info('Drop detected within loop node:', { 
       id, 
-      target: (e.target as HTMLElement).className,
-      clientX: e.clientX + 180,
-      clientY: e.clientY + 220,
       dataTransferTypes: e.dataTransfer.types,
-      hasDataAttribute: !!document.querySelector('[data-drag-data]')
     })
     
-    // Clean up any visual effects immediately when drop occurs
-    const nodeElement = document.querySelector(`[data-id="${id}"]`);
-    if (nodeElement) {
-      nodeElement.classList.remove('loop-node-drag-over');
-      nodeElement.classList.remove('dragging-over');
-    }
+    setIsValidDragOver(false)
     
     try {
       // Get the drop position in React-Flow coordinates
-      const clientPoint = { x: e.clientX + 180, y: e.clientY + 220};
+      const clientPoint = { x: e.clientX + 150, y: e.clientY + 250 };
       const flowPoint = screenToFlowPosition(clientPoint);
       
       // Helper function for auto-connecting blocks
@@ -204,7 +101,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         }
       }
       
-      // First check for nodes being dragged via our custom attribute
+      // First check for nodes being dragged via data attribute
       const draggingNodeElement = document.querySelector('[data-drag-data]')
       if (draggingNodeElement) {
         const dragDataStr = draggingNodeElement.getAttribute('data-drag-data')
@@ -284,136 +181,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     }
   }, [id, screenToFlowPosition, addEdge, getNodes, blocks, addBlock, updateParentId])
   
-  // Set up drag event handlers
-  useEffect(() => {
-    const nodeElement = document.querySelector(`[data-id="${id}"]`)
-    if (!nodeElement) return
-    
-    const handleDragOver = (e: Event) => {
-      e.preventDefault()
-      
-      try {
-        const dragEvent = e as DragEvent
-        
-        // Check if we're dragging an existing node
-        const target = dragEvent.target as HTMLElement
-        const existingNodeElement = target.closest('.react-flow__node-workflowBlock')
-        if (existingNodeElement) {
-          const nodeId = existingNodeElement.getAttribute('data-id')
-          if (nodeId && nodeId !== id) {
-            // This is an existing node being dragged over the loop
-            logger.info('Existing node dragged over loop via DOM traversal:', { 
-              nodeId, 
-              loopId: id,
-              target: (target as HTMLElement).className
-            })
-            setIsValidDragOver(true)
-            
-            // Add animated effect to highlight the drop area
-            nodeElement.classList.add('loop-node-drag-over');
-            nodeElement.classList.add('dragging-over');
-            return
-          }
-        }
-        
-        // Check for nodes being dragged using our custom attribute
-        const draggingNodeElement = document.querySelector('[data-drag-data]')
-        if (draggingNodeElement) {
-          const nodeId = draggingNodeElement.getAttribute('data-id')
-          if (nodeId && nodeId !== id) {
-            const dragData = draggingNodeElement.getAttribute('data-drag-data')
-            if (dragData) {
-              try {
-                const parsedData = JSON.parse(dragData)
-                logger.info('Found node with drag data:', {
-                  nodeId,
-                  loopId: id,
-                  dragData: parsedData
-                })
-                
-                if (parsedData.isExistingNode && parsedData.type && parsedData.type !== 'starter' && parsedData.type !== 'loop') {
-                  // This is an existing node being dragged from the canvas
-                  logger.info('Existing node with drag data being dragged over loop:', { 
-                    nodeId, 
-                    loopId: id, 
-                    data: parsedData 
-                  })
-                  setIsValidDragOver(true)
-                  nodeElement.classList.add('loop-node-drag-over');
-                  nodeElement.classList.add('dragging-over');
-                  return
-                }
-              } catch (parseError) {
-                // Ignore JSON parse errors
-                logger.error('Error parsing drag data during dragover:', { parseError, dragData })
-              }
-            }
-          }
-        }
-        
-        // Check for new nodes from toolbar
-        if (dragEvent.dataTransfer?.getData) {
-          try {
-            const rawData = dragEvent.dataTransfer.getData('application/json')
-            if (rawData) {
-              const data = JSON.parse(rawData)
-              // Check if it's not a starter block
-              const type = data.type || (data.data && data.data.type)
-              if (type && type !== 'starter' && type !== 'loop') {
-                logger.info('Toolbar item dragged over loop:', { type })
-                setIsValidDragOver(true)
-                
-                // Add animated effect to highlight the drop area
-                nodeElement.classList.add('loop-node-drag-over');
-                nodeElement.classList.add('dragging-over');
-                return
-              }
-            }
-          } catch (parseError) {
-            // Ignore parse errors
-          }
-        }
-        
-        nodeElement.classList.remove('loop-node-drag-over');
-        nodeElement.classList.remove('dragging-over');
-        setIsValidDragOver(false)
-      } catch (err) {
-        logger.error('Error in drag over:', { err })
-        nodeElement.classList.remove('loop-node-drag-over');
-        nodeElement.classList.remove('dragging-over');
-        setIsValidDragOver(false)
-      }
-    }
-    
-    const handleDragLeave = () => {
-      setIsValidDragOver(false)
-      nodeElement.classList.remove('loop-node-drag-over');
-      nodeElement.classList.remove('dragging-over');
-    }
-    
-    nodeElement.addEventListener('dragover', handleDragOver as EventListener)
-    nodeElement.addEventListener('dragleave', handleDragLeave)
-    nodeElement.addEventListener('drop', handleDrop as unknown as EventListener)
-    
-    return () => {
-      nodeElement.removeEventListener('dragover', handleDragOver as EventListener)
-      nodeElement.removeEventListener('dragleave', handleDragLeave)
-      nodeElement.removeEventListener('drop', handleDrop as unknown as EventListener)
-    }
-  }, [id, handleDrop])
-  
-  // Clean up any leftover drag data attributes when component unmounts
-  useEffect(() => {
-    return () => {
-      // Clean up any nodes with drag-data when component is unmounted
-      const nodeWithDragData = document.querySelector('[data-drag-data]');
-      if (nodeWithDragData) {
-        logger.info('Cleaning up leftover drag data on unmount');
-        nodeWithDragData.removeAttribute('data-drag-data');
-      }
-    };
-  }, []);
-  
+  // Handle resize with boundaries
   const handleResize = useCallback((evt: any, params: { width: number; height: number }) => {
     // Always ensure minimum dimensions
     const minWidth = 800
@@ -422,70 +190,9 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     const finalWidth = Math.max(params.width, minWidth)
     const finalHeight = Math.max(params.height, minHeight)
     
-    // Immediately update ReactFlow node style for responsive feedback
-    setNodes((nodes) => 
-      nodes.map((node) => {
-        if (node.id === id) {
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              width: finalWidth,
-              height: finalHeight
-            },
-            style: {
-              ...node.style,
-              width: finalWidth,
-              height: finalHeight
-            }
-          }
-        }
-        return node
-      })
-    )
-    
-    // Throttle the dimensions store update to reduce unnecessary sync operations
-    // while still maintaining responsive UI
+    // Update node dimensions
     updateNodeDimensions(id, { width: finalWidth, height: finalHeight })
-    
-    // Check for child nodes outside boundaries after resize
-    const childNodes = getNodes().filter(node => node.parentId === id)
-    if (childNodes.length > 0) {
-      // Check if any child nodes need to be repositioned
-      childNodes.forEach(node => {
-        
-        // Reposition nodes that would be outside the new boundaries
-        if (node.position.x > finalWidth - 320 || node.position.y > finalHeight - 180) {
-          const newPos = {
-            // Keep within boundaries with some padding
-            x: Math.min(node.position.x, finalWidth - 350),
-            y: Math.min(node.position.y, finalHeight - 200)
-          }
-          
-          // Update node position if needed
-          if (newPos.x !== node.position.x || newPos.y !== node.position.y) {
-            setNodes(nodes => 
-              nodes.map(n => {
-                if (n.id === node.id) {
-                  return {
-                    ...n,
-                    position: newPos
-                  }
-                }
-                return n
-              })
-            )
-          }
-        }
-      })
-    }
-  }, [id, updateNodeDimensions, getNodes, setNodes])
-
-  // Remove the problematic boundary enforcement effect
-  useEffect(() => {
-    // Cleanup only
-    return () => {};
-  }, []);
+  }, [id, updateNodeDimensions])
 
   return (
     <div className="relative group">
@@ -497,7 +204,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         <NodeResizer 
           minWidth={800} 
           minHeight={1000}
-          isVisible={false}
+          isVisible={selected}
           lineClassName="border-primary border-2"
           handleClassName="h-4 w-4 bg-primary border-primary"
           handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
@@ -527,81 +234,29 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
           onDrop={handleDrop}
           onDragOver={(e) => {
             e.preventDefault();
-            const dragEvent = e.nativeEvent;
-            
-            // Check if we're dragging an existing node with custom attribute
-            const draggingNodeElement = document.querySelector('[data-drag-data]');
-            if (draggingNodeElement) {
-              const nodeId = draggingNodeElement.getAttribute('data-id');
-              if (nodeId && nodeId !== id) {
-                const dragData = draggingNodeElement.getAttribute('data-drag-data');
-                if (dragData) {
-                  try {
-                    const parsedData = JSON.parse(dragData);
-                    logger.info('React onDragOver found node with drag data:', {
-                      nodeId,
-                      loopId: id,
-                      dragData: parsedData
-                    });
-                    
-                    if (parsedData.isExistingNode && parsedData.type) {
-                      setIsValidDragOver(true);
-                      // Highlight effect
-                      const nodeElement = document.querySelector(`[data-id="${id}"]`);
-                      if (nodeElement) {
-                        nodeElement.classList.add('loop-node-drag-over');
-                        nodeElement.classList.add('dragging-over');
-                      }
-                      return;
-                    }
-                  } catch (err) {
-                    logger.error('Error parsing drag data:', err);
-                  }
-                }
-              }
-            }
-            
-            // Also check for toolbar items
             try {
-              if (dragEvent.dataTransfer?.types.includes('application/json')) {
-                const rawData = dragEvent.dataTransfer.getData('application/json');
+              // Check for toolbar items
+              if (e.dataTransfer?.types.includes('application/json')) {
+                const rawData = e.dataTransfer.getData('application/json');
                 if (rawData) {
                   const data = JSON.parse(rawData);
                   const type = data.type || (data.data && data.data.type);
-                  logger.info('Toolbar item dragged over loop:', { type });
                   
                   if (type && type !== 'starter' && type !== 'loop' && type !== 'connectionBlock') {
                     setIsValidDragOver(true);
-                    // Highlight effect
-                    const nodeElement = document.querySelector(`[data-id="${id}"]`);
-                    if (nodeElement) {
-                      nodeElement.classList.add('loop-node-drag-over');
-                      nodeElement.classList.add('dragging-over');
-                    }
                     return;
                   }
                 }
               }
+              
+              // If we get here, no valid drag is happening
+              setIsValidDragOver(false);
             } catch (err) {
               logger.error('Error checking dataTransfer:', err);
-            }
-            
-            // If we get here, no valid drag is happening
-            setIsValidDragOver(false);
-            const nodeElement = document.querySelector(`[data-id="${id}"]`);
-            if (nodeElement) {
-              nodeElement.classList.remove('loop-node-drag-over');
-              nodeElement.classList.remove('dragging-over');
+              setIsValidDragOver(false);
             }
           }}
-          onDragLeave={(e) => {
-            setIsValidDragOver(false);
-            const nodeElement = document.querySelector(`[data-id="${id}"]`);
-            if (nodeElement) {
-              nodeElement.classList.remove('loop-node-drag-over');
-              nodeElement.classList.remove('dragging-over');
-            }
-          }}
+          onDragLeave={() => setIsValidDragOver(false)}
           data-node-id={id}
           data-type="group"
         >
@@ -648,103 +303,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* Custom resize handle visible in the bottom right corner */}
-          <div
-            className="absolute bottom-0 right-0 w-10 h-10 cursor-nwse-resize z-10 group hover:bg-gray-100/10 rounded-bl-lg"
-            style={{
-              pointerEvents: 'all',
-              transform: 'translate(2px, 2px)',
-            }}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              
-              // Store initial coordinates
-              const startX = e.clientX;
-              const startY = e.clientY;
-              const startWidth = data.width || 800;
-              const startHeight = data.height || 1000;
-              
-              // Attempt to trigger ReactFlow's built-in resizer first
-              const resizerHandle = document.querySelector(`[data-id="${id}"] .react-flow__resize-control.bottom-right`);
-              
-              if (resizerHandle && resizerHandle instanceof HTMLElement) {
-                // Directly trigger ReactFlow's built-in resizer
-                const mouseEvent = new MouseEvent('mousedown', {
-                  bubbles: true,
-                  cancelable: true,
-                  clientX: e.clientX,
-                  clientY: e.clientY,
-                  button: 0,
-                  view: window
-                });
-                
-                resizerHandle.dispatchEvent(mouseEvent);
-                return;
-              }
-              
-              // Fallback: Implement manual resize for better responsiveness
-              let isDragging = true;
-              
-              const onMouseMove = (moveEvent: MouseEvent) => {
-                if (!isDragging) return;
-                
-                // Calculate new dimensions based on mouse movement
-                const deltaX = moveEvent.clientX - startX;
-                const deltaY = moveEvent.clientY - startY;
-                
-                const newWidth = Math.max(800, startWidth + deltaX);
-                const newHeight = Math.max(1000, startHeight + deltaY);
-                
-                // Update node dimensions first for immediate feedback
-                setNodes(nodes => 
-                  nodes.map(node => {
-                    if (node.id === id) {
-                      return {
-                        ...node,
-                        data: {
-                          ...node.data,
-                          width: newWidth,
-                          height: newHeight
-                        },
-                        style: {
-                          ...node.style,
-                          width: newWidth,
-                          height: newHeight
-                        }
-                      };
-                    }
-                    return node;
-                  })
-                );
-                
-                // Also update store dimensions
-                handleResize(null, { width: newWidth, height: newHeight });
-              };
-              
-              const onMouseUp = () => {
-                isDragging = false;
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup', onMouseUp);
-              };
-              
-              document.addEventListener('mousemove', onMouseMove);
-              document.addEventListener('mouseup', onMouseUp);
-            }}
-          >
-            {/* Subtle diagonal lines indicating resize handle */}
-            <svg 
-              width="14" 
-              height="14" 
-              viewBox="0 0 14 14" 
-              fill="none" 
-              xmlns="http://www.w3.org/2000/svg"
-              className="opacity-40 group-hover:opacity-100 transition-opacity absolute right-1 bottom-1"
-            >
-              <path d="M13 13L8 8M13 3L3 13" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
           </div>
 
           {/* Input handle on left middle */}
