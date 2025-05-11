@@ -109,8 +109,6 @@ function WorkflowContent() {
   const { activeBlockIds, pendingBlocks } = useExecutionStore()
   const { isDebugModeEnabled } = useGeneralStore()
 
-  // Flag to prevent the integrity-checker from recursively scheduling itself
-  const fixingRef = useRef(false)
   // Track group nodes that are currently being dragged so we can ignore
   // synthetic child position events that React-Flow emits while the parent
   // is moving.  This prevents us from overwriting the child positions that
@@ -1012,6 +1010,23 @@ function WorkflowContent() {
   const onEdgeClick = useCallback((event: React.MouseEvent, edge: any) => {
     event.stopPropagation();
     
+    console.log('----------- EDGE SELECTION START -----------');
+    
+    // 1. Log initial state
+    const beforeNodes = getNodes();
+    const childNodesBefore = beforeNodes.filter(node => node.parentId);
+    
+    console.log('Before selection - All nodes count:', beforeNodes.length);
+    console.log('Before selection - Child nodes count:', childNodesBefore.length);
+    
+    console.log('Child nodes before selection:', childNodesBefore.map(node => ({
+      id: node.id,
+      type: node.type,
+      parentId: node.parentId,
+      position: { ...node.position },
+      positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : 'undefined'
+    })));
+    
     // 1. First, capture current state before we do anything
     const allNodes = getNodes();
     const childNodeMap = new Map();
@@ -1046,6 +1061,8 @@ function WorkflowContent() {
       });
     });
     
+    console.log('Expected positions for child nodes:', Object.fromEntries(expectedPositions));
+    
     // 4. Update selected edge - this will trigger ReactFlow's rerender
     setSelectedEdgeId(edge.id);
     
@@ -1053,6 +1070,37 @@ function WorkflowContent() {
     queueMicrotask(() => {
       // Get nodes post-selection to see what changed
       const updatedNodes = getNodes();
+      const childNodesAfter = updatedNodes.filter(node => node.parentId);
+      
+      console.log('After selection - All nodes count:', updatedNodes.length);
+      console.log('After selection - Child nodes count:', childNodesAfter.length);
+      
+      console.log('Child nodes after selection:', childNodesAfter.map(node => ({
+        id: node.id,
+        type: node.type,
+        parentId: node.parentId,
+        position: { ...node.position },
+        positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : 'undefined',
+        hasChanged: expectedPositions.has(node.id) ? 
+          Math.abs(node.position.x - expectedPositions.get(node.id).relative.x) > 0.1 ||
+          Math.abs(node.position.y - expectedPositions.get(node.id).relative.y) > 0.1 : 'N/A'
+      })));
+      
+      // Check if any child nodes disappeared
+      const beforeIds = new Set(childNodesBefore.map(n => n.id));
+      const afterIds = new Set(childNodesAfter.map(n => n.id));
+      
+      const missingNodes = [...beforeIds].filter(id => !afterIds.has(id));
+      const newNodes = [...afterIds].filter(id => !beforeIds.has(id));
+      
+      if (missingNodes.length > 0) {
+        console.log('ALERT: Some child nodes disappeared after edge selection:', missingNodes);
+      }
+      
+      if (newNodes.length > 0) {
+        console.log('ALERT: New child nodes appeared after edge selection:', newNodes);
+      }
+      
       let positionsFixed = 0;
       
       // Fix any nodes that lost their proper positioning
@@ -1062,22 +1110,34 @@ function WorkflowContent() {
           if (!node.parentId) return node;
           
           const expectedPos = expectedPositions.get(node.id);
-          if (!expectedPos) return node;
+          if (!expectedPos) {
+            console.log('No expected position found for child node:', node.id);
+            return node;
+          }
           
           // Find the current parent node
           const parentNode = updatedNodes.find(p => p.id === node.parentId);
-          if (!parentNode) return node;
+          if (!parentNode) {
+            console.log('Parent node not found for child:', node.id, 'parentId:', node.parentId);
+            return node;
+          }
           
           // Check if position is significantly different from expected
-          if (Math.abs(node.position.x - expectedPos.relative.x) > 0.1 || 
-              Math.abs(node.position.y - expectedPos.relative.y) > 0.1) {
+          const positionChanged = 
+            Math.abs(node.position.x - expectedPos.relative.x) > 0.1 || 
+            Math.abs(node.position.y - expectedPos.relative.y) > 0.1;
             
+          if (positionChanged) {
             positionsFixed++;
-            // Log detailed fix information
-            logger.info(`Fixing child node ${node.id} position during edge selection`, {
-              current: node.position,
-              expected: expectedPos.relative,
-              parentId: node.parentId
+            
+            console.log('Fixing child node position:', {
+              nodeId: node.id,
+              current: { ...node.position },
+              expected: { ...expectedPos.relative },
+              delta: {
+                x: node.position.x - expectedPos.relative.x,
+                y: node.position.y - expectedPos.relative.y
+              }
             });
             
             // Return fixed node
@@ -1096,8 +1156,20 @@ function WorkflowContent() {
       );
       
       if (positionsFixed > 0) {
-        logger.info(`Fixed positions for ${positionsFixed} child nodes during edge selection`);
+        console.log(`Fixed positions for ${positionsFixed} child nodes during edge selection`);
       }
+      
+      // Log final state
+      const finalNodes = getNodes();
+      const finalChildNodes = finalNodes.filter(node => node.parentId);
+      
+      console.log('Final child nodes after fixes:', finalChildNodes.map(node => ({
+        id: node.id,
+        position: { ...node.position },
+        positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : 'undefined'
+      })));
+      
+      console.log('----------- EDGE SELECTION END -----------');
       
       // Clear flag after position fixes
       isHandlingEdgeSelection.current = false;
@@ -1214,6 +1286,7 @@ function WorkflowContent() {
           
           // Edge properties
           defaultEdgeOptions={{ type: 'custom' }}
+          elevateEdgesOnSelect={false}
           connectionLineStyle={{
             stroke: '#94a3b8',
             strokeWidth: 2,
