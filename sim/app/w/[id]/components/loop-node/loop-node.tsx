@@ -416,8 +416,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   }, []);
   
   const handleResize = useCallback((evt: any, params: { width: number; height: number }) => {
-    logger.info('Loop node resized:', { id, width: params.width, height: params.height })
-    
     // Always ensure minimum dimensions
     const minWidth = 800
     const minHeight = 1000
@@ -425,11 +423,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
     const finalWidth = Math.max(params.width, minWidth)
     const finalHeight = Math.max(params.height, minHeight)
     
-    // Update both the node dimensions in workflow store 
-    // AND the node style in React Flow
-    updateNodeDimensions(id, { width: finalWidth, height: finalHeight })
-    
-    // Also update the ReactFlow node directly to ensure immediate visual feedback
+    // Immediately update ReactFlow node style for responsive feedback
     setNodes((nodes) => 
       nodes.map((node) => {
         if (node.id === id) {
@@ -451,21 +445,22 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       })
     )
     
-    // Update child node positions if needed
+    // Throttle the dimensions store update to reduce unnecessary sync operations
+    // while still maintaining responsive UI
+    updateNodeDimensions(id, { width: finalWidth, height: finalHeight })
+    
+    // Check for child nodes outside boundaries after resize
     const childNodes = getNodes().filter(node => node.parentId === id)
     if (childNodes.length > 0) {
       // Check if any child nodes need to be repositioned
       childNodes.forEach(node => {
-        const rightEdge = node.position.x + 320 // Approximate node width
-        const bottomEdge = node.position.y + 180 // Approximate node height
         
-        // Only reposition nodes that are completely outside the boundaries
-        if (node.position.x > finalWidth || node.position.y > finalHeight) {
+        // Reposition nodes that would be outside the new boundaries
+        if (node.position.x > finalWidth - 320 || node.position.y > finalHeight - 180) {
           const newPos = {
-            // Keep x position if possible, only constrain if completely outside
-            x: node.position.x > finalWidth ? finalWidth - 20 : node.position.x,
-            // Keep y position if possible, only constrain if completely outside
-            y: node.position.y > finalHeight ? finalHeight - 20 : node.position.y,
+            // Keep within boundaries with some padding
+            x: Math.min(node.position.x, finalWidth - 350),
+            y: Math.min(node.position.y, finalHeight - 200)
           }
           
           // Update node position if needed
@@ -667,104 +662,77 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
               e.preventDefault();
               e.stopPropagation();
               
-              // Store the mouse coordinates for use after timeout
-              const clientX = e.clientX + 180;
-              const clientY = e.clientY + 220;
-              const startX = clientX;
-              const startY = clientY;
+              // Store initial coordinates
+              const startX = e.clientX;
+              const startY = e.clientY;
+              const startWidth = data.width || 800;
+              const startHeight = data.height || 1000;
               
-              logger.info('Resize handle clicked, looking for ReactFlow resizer:', { id });
+              // Attempt to trigger ReactFlow's built-in resizer first
+              const resizerHandle = document.querySelector(`[data-id="${id}"] .react-flow__resize-control.bottom-right`);
               
-              // Use a small timeout to ensure ReactFlow has fully initialized its resize handlers
-              setTimeout(() => {
-                try {
-                  // Try several selector strategies
-                  let resizerHandle = document.querySelector(`[data-id="${id}"] .react-flow__resize-control.bottom-right`);
-                  
-                  // If specific class selector doesn't work, try to find by position attribute
-                  if (!resizerHandle) {
-                    const allResizeControls = document.querySelectorAll(`[data-id="${id}"] .react-flow__resize-control`);
-                    logger.info(`Found ${allResizeControls.length} resize controls`);
-                    
-                    // Find the bottom-right handle by checking all resize controls
-                    for (const control of Array.from(allResizeControls)) {
-                      const rect = control.getBoundingClientRect();
-                      const controlElement = control as HTMLElement;
-                      const style = window.getComputedStyle(controlElement);
-                      
-                      // Log position info to help debug
-                      logger.info('Resize control position:', { 
-                        right: style.right, 
-                        bottom: style.bottom,
-                        transform: style.transform
-                      });
-                      
-                      // Bottom-right handle will typically have 'right' and 'bottom' set to 0
-                      if (style.right === '0px' && style.bottom === '0px') {
-                        resizerHandle = control;
-                        break;
-                      }
+              if (resizerHandle && resizerHandle instanceof HTMLElement) {
+                // Directly trigger ReactFlow's built-in resizer
+                const mouseEvent = new MouseEvent('mousedown', {
+                  bubbles: true,
+                  cancelable: true,
+                  clientX: e.clientX,
+                  clientY: e.clientY,
+                  button: 0,
+                  view: window
+                });
+                
+                resizerHandle.dispatchEvent(mouseEvent);
+                return;
+              }
+              
+              // Fallback: Implement manual resize for better responsiveness
+              let isDragging = true;
+              
+              const onMouseMove = (moveEvent: MouseEvent) => {
+                if (!isDragging) return;
+                
+                // Calculate new dimensions based on mouse movement
+                const deltaX = moveEvent.clientX - startX;
+                const deltaY = moveEvent.clientY - startY;
+                
+                const newWidth = Math.max(800, startWidth + deltaX);
+                const newHeight = Math.max(1000, startHeight + deltaY);
+                
+                // Update node dimensions first for immediate feedback
+                setNodes(nodes => 
+                  nodes.map(node => {
+                    if (node.id === id) {
+                      return {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          width: newWidth,
+                          height: newHeight
+                        },
+                        style: {
+                          ...node.style,
+                          width: newWidth,
+                          height: newHeight
+                        }
+                      };
                     }
-                    
-                    // Final fallback: just try the last resize control
-                    if (!resizerHandle && allResizeControls.length > 0) {
-                      resizerHandle = allResizeControls[allResizeControls.length - 1];
-                    }
-                  }
-                  
-                  if (resizerHandle && resizerHandle instanceof HTMLElement) {
-                    // Create and dispatch a mousedown event to the original resizer
-                    const mouseEvent = new MouseEvent('mousedown', {
-                      bubbles: true,
-                      cancelable: true,
-                      clientX,
-                      clientY,
-                      button: 0,  // Left button
-                      view: window
-                    });
-                    
-                    resizerHandle.dispatchEvent(mouseEvent);
-                    logger.info('Successfully triggered resize handle for loop node:', { id });
-                  } else {
-                    // If we can't find the resize handle, implement manual resize as fallback
-                    logger.warn('Could not find ReactFlow resize handle, using fallback resize:', { id });
-                    
-                    // Get the current node dimensions
-                    const currentWidth = data.width || 800;
-                    const currentHeight = data.height || 1000;
-                    const minWidth = 800;
-                    const minHeight = 1000;
-                    
-                    // Setup manual resize
-                    let isDragging = true;
-                    
-                    const onMouseMove = (moveEvent: MouseEvent) => {
-                      if (!isDragging) return;
-                      
-                      // Calculate new dimensions based on mouse movement
-                      const deltaX = moveEvent.clientX - startX;
-                      const deltaY = moveEvent.clientY - startY;
-                      
-                      const newWidth = Math.max(minWidth, currentWidth + deltaX);
-                      const newHeight = Math.max(minHeight, currentHeight + deltaY);
-                      
-                      // Update node dimensions
-                      handleResize(null, { width: newWidth, height: newHeight });
-                    };
-                    
-                    const onMouseUp = () => {
-                      isDragging = false;
-                      document.removeEventListener('mousemove', onMouseMove);
-                      document.removeEventListener('mouseup', onMouseUp);
-                    };
-                    
-                    document.addEventListener('mousemove', onMouseMove);
-                    document.addEventListener('mouseup', onMouseUp);
-                  }
-                } catch (error) {
-                  logger.error('Error trying to activate resize handle:', { error, id });
-                }
-              }, 50); // Short delay to ensure DOM is ready
+                    return node;
+                  })
+                );
+                
+                // Also update store dimensions
+                handleResize(null, { width: newWidth, height: newHeight });
+              };
+              
+              const onMouseUp = () => {
+                isDragging = false;
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+              };
+              
+              document.addEventListener('mousemove', onMouseMove);
+              document.addEventListener('mouseup', onMouseUp);
             }}
           >
             {/* Subtle diagonal lines indicating resize handle */}
