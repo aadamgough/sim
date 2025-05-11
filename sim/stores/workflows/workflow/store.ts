@@ -236,25 +236,17 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           return;
         }
         
-        // Get parent node to calculate relative position
-        const parentBlock = get().blocks[parentId];
-        if (!parentBlock) {
-          console.warn(`Cannot set parent: Parent block ${parentId} not found`);
-          return;
-        }
         const absolutePosition = { ...block.position };
-        const relativePosition = {
-          x: absolutePosition.x + 400,
-          y: absolutePosition.y + 500
-        };
-        
-        // Update the block with the new parent ID and constrained position
+        // The store always keeps absolute coordinates. We therefore leave
+        // block.position untouched. React Flow will convert this to a
+        // relative coordinate every render (see workflow.tsx nodes useMemo).
+
         const newState = {
           blocks: {
             ...get().blocks,
             [id]: {
               ...block,
-              position: relativePosition,
+              position: absolutePosition,
               data: {
                 ...block.data,
                 parentId,
@@ -266,11 +258,11 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           loops: { ...get().loops },
         };
         
-        console.log('[WorkflowStore/updateParentId] Updating with new position:', {
+        console.log('[WorkflowStore/updateParentId] Updated parentId – keeping absolute position unchanged:', {
           blockId: id,
-          newRelativePosition: relativePosition,
+          absolutePosition,
           originalPos: block.position,
-          storeIn: "block.position (not data.position)"
+          storeIn: 'block.position (absolute)'
         });
         
         set(newState);

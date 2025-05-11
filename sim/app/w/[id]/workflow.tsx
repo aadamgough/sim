@@ -346,7 +346,6 @@ function WorkflowContent() {
           position: relativePosition,
           draggable: true,
         dragHandle: '.workflow-drag-handle',
-        parentNode: parentId,
         extent: 'parent' as const,
         parentId,
         data: {
@@ -463,7 +462,6 @@ function WorkflowContent() {
           return {
             ...node,
             parentId: f.parentId ?? undefined,
-            parentNode: f.parentId ?? undefined,
             extent: f.parentId ? ('parent' as const) : undefined,
             positionAbsolute: f.correctAbs,
             data: { ...node.data, parentId: f.parentId, _absolutePosition: f.correctAbs },
@@ -720,6 +718,8 @@ function WorkflowContent() {
 
     // Find all loop nodes and check if this node is over one
     const loopNodes = document.querySelectorAll('.react-flow__node-group');
+    let foundLoop = false;
+    
     for (const loopNodeEl of loopNodes) {
       const loopId = loopNodeEl.getAttribute('data-id');
       if (!loopId) continue;
@@ -974,22 +974,110 @@ function WorkflowContent() {
     event.stopPropagation()
     logger.info(`Edge clicked: ${edge.id} (${edge.source} -> ${edge.target})`)
 
-    const before = getNodes()
-      .filter((n) => n.parentId)
-      .map((n) => ({ id: n.id, parentId: n.parentId, rel: n.position, abs: n.positionAbsolute }))
-    logger.debug('Child snapshot BEFORE selection', before)
+    // Capture current child node state from both ReactFlow and our store
+    const rfChildNodes = getNodes().filter(n => n.parentId)
+    const childNodesMap = new Map()
+    
+    // First collect all actual child nodes from our store
+    Object.entries(blocks).forEach(([id, block]) => {
+      const parentId = block.data?.parentId
 
+      if (parentId) {
+        // block.position is already stored as an absolute coordinate in the
+        // workflow store. We therefore keep it as-is and *do not* add the
+        // parent position again – doing so would over-offset the node and is
+        // exactly what pushed our children far away.
+        childNodesMap.set(id, {
+          id,
+          name: block.name,
+          type: block.type,
+          parentId,
+          position: { ...block.position },
+          absolutePosition: { ...block.position },
+        })
+      }
+    })
+    
+    // Log child state before selection
+    const before = rfChildNodes.map(n => ({ 
+      id: n.id, 
+      name: n.data?.name,
+      parentId: n.parentId, 
+      rel: n.position, 
+      abs: n.positionAbsolute 
+    }))
+    logger.debug('Child snapshot BEFORE selection', before)
+    
+    // Set the selected edge ID
     setSelectedEdgeId(edge.id)
 
+    // After React Flow updates, ensure all child nodes are present and positioned correctly
     requestAnimationFrame(() => {
-      const after = getNodes()
-        .filter((n) => n.parentId)
-        .map((n) => ({ id: n.id, parentId: n.parentId, rel: n.position, abs: n.positionAbsolute }))
+      // Check what nodes ReactFlow still has
+      const currentRfNodes = getNodes()
+      const afterChildNodes = currentRfNodes.filter(n => n.parentId)
+      
+      const after = afterChildNodes.map(n => ({ 
+        id: n.id, 
+        name: n.data?.name,
+        parentId: n.parentId, 
+        rel: n.position, 
+        abs: n.positionAbsolute 
+      }))
       logger.debug('Child snapshot AFTER selection', after)
+      
+      // Check for any missing or corrupted nodes
+      const corrupted = afterChildNodes.filter(node => 
+        node.positionAbsolute && 
+        Math.abs(node.positionAbsolute.x - node.position.x) < 0.1
+      )
+      
+      const allNodeIds = new Set(currentRfNodes.map(n => n.id))
+      const missingNodes = Array.from(childNodesMap.values())
+        .filter(node => !allNodeIds.has(node.id))
+      
+      if (corrupted.length > 0 || missingNodes.length > 0) {
+        logger.info(`Fixing nodes after edge selection: ${corrupted.length} corrupted, ${missingNodes.length} missing`)
+        
+        // Generate a new complete set of nodes
+        const updatedNodes = [...currentRfNodes]
+        
+        // Fix corrupted nodes
+        for (let i = 0; i < updatedNodes.length; i++) {
+          const node = updatedNodes[i]
+          console.log('Here is one node in the corrupted nodes list', node)
+          const storedNode = childNodesMap.get(node.id)
+          console.log('Here is the stored node', storedNode)
+          
+          if (storedNode && node.parentId) {
+            // Fix corrupted positions
+            updatedNodes[i] = {
+              ...node,
+              positionAbsolute: storedNode.absolutePosition,
+              data: {
+                ...node.data,
+                _absolutePosition: storedNode.absolutePosition
+              }
+            }
+            console.log('Here is the updated node from the corrupted nodes list', updatedNodes[i])
+          }
+        }
+        // Update all nodes in ReactFlow
+        reactFlowInstance.setNodes(updatedNodes)
 
-      ensureChildIntegrity()
+        // After applying corrections, run integrity checker once more
+        // to ensure that all absolute / relative positions are synced
+        // between React Flow and the central store. This takes care of
+        // cases where a parent group node was shifted by React Flow
+        // itself (e.g. when selecting an external edge) and therefore
+        // guarantees that the follow-up render uses the right
+        // coordinates.
+        requestAnimationFrame(() => {
+          ensureChildIntegrity();
+        })
+      }
     })
-  }, [getNodes, ensureChildIntegrity])
+  }, [getNodes, blocks, reactFlowInstance, ensureChildIntegrity])
 
   // Keyboard shortcuts: delete selected edge
   useEffect(() => {

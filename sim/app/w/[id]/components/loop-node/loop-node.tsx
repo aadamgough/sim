@@ -86,7 +86,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         ...updatedNodes[existingNodeIndex],
         position: relativePosition,
         parentId: id,
-        parentNode: id,
         extent: 'parent' as const
       };
       

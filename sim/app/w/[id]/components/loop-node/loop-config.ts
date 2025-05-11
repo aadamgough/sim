@@ -29,6 +29,5 @@ export const LoopTool = {
   },
   dragHandle: '.workflow-drag-handle',
   // Specify that this should be rendered as a ReactFlow group node
-  reactFlowType: 'group',
   isResizable: true,
 } 
