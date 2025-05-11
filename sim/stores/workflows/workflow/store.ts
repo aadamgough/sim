@@ -188,6 +188,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
               };
             }
           });
+          console.log('Child node positions updated:', updatedBlocks)
         }
 
         set({ blocks: updatedBlocks as any, edges: [...get().edges] });

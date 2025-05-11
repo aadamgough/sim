@@ -22,6 +22,7 @@ import { initializeSyncManagers, isSyncInitialized } from '@/stores/sync-registr
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 import { useSubBlockStore } from '@/stores/workflows/subblock/store'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
+import { Position } from '@/stores/workflows/workflow/types'
 import { NotificationList } from '@/app/w/[id]/components/notifications/notifications'
 import { getBlock } from '@/blocks'
 import { ControlBar } from './components/control-bar/control-bar'
@@ -405,6 +406,11 @@ function WorkflowContent() {
    *  Integrity checker – keeps child nodes consistent with store data.
    * ------------------------------------------------------------------ */
   const ensureChildIntegrity = useCallback(() => {
+    // Skip integrity checks during parent node drags to prevent position conflicts
+    if (draggingParentsRef.current.size > 0) {
+      return;
+    }
+    
     const fixes: any[] = []
     const nodesSnapshot = getNodes()
 
@@ -475,44 +481,35 @@ function WorkflowContent() {
     (changes: any) => {
       if (!Array.isArray(changes) || changes.length === 0) return;
 
-      // First collect any loop/group nodes that moved so we can ignore their childrenʼs
-      // synthetic position events in the same batch – this prevents the "opposite direction" bug.
+      // Track parent nodes being moved in this batch
       const movedParentIds = new Set<string>();
+      
       changes.forEach((c: any) => {
         if (c.type === 'position') {
           const blk = blocks[c.id];
           if (blk?.type === 'loop') {
             movedParentIds.add(c.id);
+            draggingParentsRef.current.add(c.id);
           }
         }
       });
 
+      // Process position changes for parent nodes first
       changes.forEach((change: any) => {
         if (change.type !== 'position' || !change.position) return;
 
         const block = blocks[change.id];
         if (!block) return;
-
+        
+        // Only process parent nodes or nodes without parents here
         const parentId = block.data?.parentId;
-
-        // If this is a child node **and** its parent loop is also in the move batch,
-        // skip processing here – the parent handler will update absolute positions.
-        if (parentId && movedParentIds.has(parentId)) {
-          logger.debug('[onNodesChange] Skipping child update because parent moved in same batch', {
-            childId: change.id,
-            parentId,
-          });
-          return;
-        }
-
-        // If this node has a parent that is currently being dragged, ignore
-        // its synthetic position event.  The parent handler already updated
-        // the childʼs absolute coordinates in the store.
-        if (parentId && draggingParentsRef.current.has(parentId)) {
-          return
-        }
-
-        if (parentId && blocks[parentId]) {
+        if (parentId) {
+          // Skip child nodes that will be moved by the updateBlockPosition logic
+          if (movedParentIds.has(parentId)) {
+            return;
+          }
+          
+          // For child nodes with stationary parents, calculate correct absolute position
           const parentPos = blocks[parentId].position;
           const absolute = {
             x: parentPos.x + change.position.x,
@@ -520,9 +517,19 @@ function WorkflowContent() {
           };
           updateBlockPosition(change.id, absolute);
         } else {
+          // Handle parent nodes or independent nodes
           updateBlockPosition(change.id, change.position);
         }
       });
+      
+      // Release the dragging parents lock after a short delay
+      if (movedParentIds.size > 0) {
+        setTimeout(() => {
+          movedParentIds.forEach(id => {
+            draggingParentsRef.current.delete(id);
+          });
+        }, 100);
+      }
 
       // Validate after React-Flow applies its internal state
       requestAnimationFrame(ensureChildIntegrity);
