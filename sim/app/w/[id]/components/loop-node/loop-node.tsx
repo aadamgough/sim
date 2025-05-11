@@ -1,6 +1,6 @@
 import { memo, useCallback, useState, useEffect } from 'react'
 import { Handle, NodeProps, Position, NodeResizer, useReactFlow } from 'reactflow'
-import { RepeatIcon, X, PlayCircle, ChevronDown } from 'lucide-react'
+import { X, PlayCircle, ArrowDownRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
@@ -195,142 +195,153 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
   }, [id, updateNodeDimensions])
 
   return (
-    <div className="relative group">
-      <div 
-        className="relative group-node-container"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-      >
-        <NodeResizer 
-          minWidth={800} 
-          minHeight={1000}
-          isVisible={selected}
-          lineClassName="border-primary border-2"
-          handleClassName="h-4 w-4 bg-primary border-primary"
-          handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
-          keepAspectRatio={false}
-          onResize={handleResize}
-        />
-        <div 
-          style={{
-            width: data.width || 800,
-            height: data.height || 1000,
-            border: isValidDragOver ? '2px solid #40E0D0' : 
-                    isHovered ? '2px solid #1e293b' : 
-                    selected ? '2px solid #94a3b8' : 
-                    '2px dashed #94a3b8',
-            backgroundColor: isValidDragOver ? 'rgba(64,224,208,0.08)' : 'transparent',
-            borderRadius: '8px',
-            position: 'relative',
-            boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
-            overflow: 'visible', // Allow children to overflow
-          }}
-          className={cn(
-            'group-node',
-            data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
-            isHovered && 'hover-highlight',
-            isValidDragOver && 'drag-highlight'
-          )}
-          onDrop={handleDrop}
-          onDragOver={(e) => {
-            e.preventDefault();
-            try {
-              // Check for toolbar items
-              if (e.dataTransfer?.types.includes('application/json')) {
-                const rawData = e.dataTransfer.getData('application/json');
-                if (rawData) {
-                  const data = JSON.parse(rawData);
-                  const type = data.type || (data.data && data.data.type);
-                  
-                  if (type && type !== 'starter' && type !== 'loop' && type !== 'connectionBlock') {
-                    setIsValidDragOver(true);
-                    return;
-                  }
-                }
-              }
+    <div 
+      className={cn(
+        'relative group-node',
+        data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
+        isHovered && 'hover-highlight',
+        isValidDragOver && 'drag-highlight'
+      )}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      style={{
+        width: data.width || 800,
+        height: data.height || 1000,
+        border: isValidDragOver ? '2px solid #40E0D0' : 
+                isHovered ? '2px solid #1e293b' : 
+                selected ? '2px solid #94a3b8' : 
+                '2px dashed #94a3b8',
+        backgroundColor: isValidDragOver ? 'rgba(64,224,208,0.08)' : 'transparent',
+        borderRadius: '8px',
+        position: 'relative',
+        boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
+        overflow: 'visible',
+      }}
+      onDrop={handleDrop}
+      onDragOver={(e) => {
+        e.preventDefault();
+        try {
+          // Check for toolbar items
+          if (e.dataTransfer?.types.includes('application/json')) {
+            const rawData = e.dataTransfer.getData('application/json');
+            if (rawData) {
+              const data = JSON.parse(rawData);
+              const type = data.type || (data.data && data.data.type);
               
-              // If we get here, no valid drag is happening
-              setIsValidDragOver(false);
-            } catch (err) {
-              logger.error('Error checking dataTransfer:', err);
-              setIsValidDragOver(false);
+              if (type && type !== 'starter' && type !== 'loop' && type !== 'connectionBlock') {
+                setIsValidDragOver(true);
+                return;
+              }
             }
+          }
+          
+          // If we get here, no valid drag is happening
+          setIsValidDragOver(false);
+        } catch (err) {
+          logger.error('Error checking dataTransfer:', err);
+          setIsValidDragOver(false);
+        }
+      }}
+      onDragLeave={() => setIsValidDragOver(false)}
+      data-node-id={id}
+      data-type="group"
+    >
+      {/* Critical drag handle for ReactFlow - DO NOT REMOVE */}
+      <div 
+        className="absolute top-0 left-0 right-0 h-10 workflow-drag-handle cursor-move z-10"
+        style={{ opacity: 0.001 }}
+      />
+      
+      {/* Child node drag handle for ReactFlow - this enables child blocks to be dragged */}
+      <div
+        className="absolute inset-0 workflow-drag-handle"
+        style={{ 
+          opacity: 0.001,
+          pointerEvents: 'none' // This prevents it from blocking other interactions
+        }}
+      />
+      
+      <NodeResizer 
+        minWidth={800} 
+        minHeight={1000}
+        isVisible={true} // Always visible
+        lineClassName="border-primary border-2"
+        handleClassName="h-4 w-4 bg-primary border-primary"
+        handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
+        keepAspectRatio={false}
+        onResize={handleResize}
+      />
+      
+      {/* Custom visible resize handle */}
+      <div 
+        className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center z-20 text-muted-foreground cursor-se-resize"
+      >
+        <ArrowDownRight size={20} className="text-primary" />
+      </div>
+      
+      {/* Child nodes container */}
+      <div 
+        className="p-4 h-[calc(100%-10px)]" 
+        data-dragarea="true"
+        style={{
+          position: 'relative',
+          minHeight: '100%',
+        }}
+      >
+        {/* Delete button - now always visible */}
+        <div 
+          className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full bg-background/90 hover:bg-red-100 border border-border cursor-pointer z-20 shadow-sm"
+          onClick={(e) => {
+            e.stopPropagation();
+            useWorkflowStore.getState().removeBlock(id);
           }}
-          onDragLeave={() => setIsValidDragOver(false)}
-          data-node-id={id}
-          data-type="group"
         >
-          {/* Child nodes container */}
-          <div 
-            className="p-4 h-[calc(100%-10px)]" 
-            data-dragarea="true"
-            style={{
-              position: 'relative',
-              minHeight: '100%',
-            }}
-          >
-            {/* Drag handle - invisible but allows dragging the loop node */}
-            <div 
-              className="absolute top-0 left-0 right-0 h-10 workflow-drag-handle cursor-move z-10 hover:bg-accent/10"
-              style={{ opacity: 0.001 }} // Nearly invisible but still detectable for hover
-            />
-            
-            {/* Delete button */}
-            <div 
-              className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full bg-background/90 hover:bg-red-100 border border-border cursor-pointer z-20 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
-              onClick={(e) => {
-                e.stopPropagation();
-                useWorkflowStore.getState().removeBlock(id);
-              }}
-            >
-              <X size={14} className="text-muted-foreground hover:text-red-500" />
+          <X size={14} className="text-muted-foreground hover:text-red-500" />
+        </div>
+        
+        {/* Loop Start Block - positioned at left middle */}
+        <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
+          <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative hover:bg-[#40E0D0]/30 transition-colors">
+            <div className="flex items-center justify-center gap-1.5">
+              <PlayCircle size={16} className="text-[#40E0D0]" />
             </div>
             
-            {/* Loop Start Block - positioned at left middle */}
-            <div className="absolute top-1/2 left-10 w-28 transform -translate-y-1/2">
-              <div className="bg-[#40E0D0]/20 border border-[#40E0D0]/50 rounded-md p-2 relative hover:bg-[#40E0D0]/30 transition-colors">
-                <div className="flex items-center justify-center gap-1.5">
-                  <PlayCircle size={16} className="text-[#40E0D0]" />
-                </div>
-                
-                <div >
-                  <Handle
-                    type="source"
-                    position={Position.Right}
-                    id="loop-start-source"
-                    className="!bg-[#40E0D0] !w-3 !h-3 z-40"
-                  />
-                </div>
-              </div>
+            <div>
+              <Handle
+                type="source"
+                position={Position.Right}
+                id="loop-start-source"
+                className="!bg-[#40E0D0] !w-3 !h-3 z-40"
+              />
             </div>
           </div>
-
-          {/* Input handle on left middle */}
-          <Handle
-            type="target"
-            position={Position.Left}
-            className="!bg-gray-400 !w-3 !h-3"
-            style={{ 
-              left: "-6px", 
-              top: "50%",
-              transform: "translateY(-50%)" 
-            }}
-          />
-            
-          {/* Output handle on right middle */}
-          <Handle
-            type="source"
-            position={Position.Right}
-            className="!bg-gray-400 !w-3 !h-3"
-            style={{ 
-              right: "-6px", 
-              top: "50%",
-              transform: "translateY(-50%)" 
-            }}
-            id="loop-end-source"
-          />
         </div>
       </div>
+
+      {/* Input handle on left middle */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!bg-gray-400 !w-3 !h-3"
+        style={{ 
+          left: "-6px", 
+          top: "50%",
+          transform: "translateY(-50%)" 
+        }}
+      />
+        
+      {/* Output handle on right middle */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!bg-gray-400 !w-3 !h-3"
+        style={{ 
+          right: "-6px", 
+          top: "50%",
+          transform: "translateY(-50%)" 
+        }}
+        id="loop-end-source"
+      />
       
       {/* Loop Configuration Badges */}
       <LoopConfigBadges nodeId={id} data={data} />
