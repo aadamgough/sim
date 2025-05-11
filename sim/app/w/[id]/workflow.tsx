@@ -344,22 +344,22 @@ function WorkflowContent() {
 
         // Create child node with parent relationship
         nodeArray.push({
-        id: block.id,
-        type: 'workflowBlock',
+          id: block.id,
+          type: 'workflowBlock',
           position: relativePosition,
           draggable: true,
-        dragHandle: '.workflow-drag-handle',
-        extent: 'parent' as const,
-        parentId,
-        data: {
-          type: block.type,
-          config: blockConfig,
-          name: block.name,
-          isActive,
+          // Remove dragHandle for child nodes to make the entire node draggable
+          extent: 'parent',
+          parentId,
+          data: {
+            type: block.type,
+            config: blockConfig,
+            name: block.name,
+            isActive,
             isPending,
             _relativePosition: relativePosition,
             parentId,
-            extent: 'parent' as const,
+            extent: 'parent',
             isChildNode: true
           },
         });
@@ -407,83 +407,95 @@ function WorkflowContent() {
   /* ------------------------------------------------------------------
    *  Integrity checker – keeps child nodes consistent with store data.
    * ------------------------------------------------------------------ */
-  const ensureChildIntegrity = useCallback(() => {
-    // Skip integrity checks during parent node drags to prevent position conflicts
-    // or when handling edge selection
-    if (draggingParentsRef.current.size > 0 || isHandlingEdgeSelection.current) {
-      return;
-    }
+  // const ensureChildIntegrity = useCallback(() => {
+  //   // Skip integrity checks during parent node drags to prevent position conflicts
+  //   // or when handling edge selection
+  //   if (draggingParentsRef.current.size > 0 || isHandlingEdgeSelection.current) {
+  //     return;
+  //   }
     
-    const fixes: any[] = []
-    const nodesSnapshot = getNodes()
-
-    nodesSnapshot.forEach((n) => {
-      const storeBlock = blocks[n.id]
-      const expectedParent = storeBlock?.data?.parentId
-
-      // Root & group nodes — absolute must equal their own position
-      if (!expectedParent) {
-        const correctAbs = { x: n.position.x, y: n.position.y }
-        if (!n.positionAbsolute || Math.abs(n.positionAbsolute.x - correctAbs.x) > 0.1) {
-          fixes.push({ id: n.id, parentId: undefined, correctAbs })
-        }
-        return
-      }
-
-      // Child nodes
-      const parentBlock = blocks[expectedParent]
-      if (!parentBlock) return
-
-      if (!n.positionAbsolute) {
-        // React Flow hasn't assigned absolute yet; skip this iteration.
-        return;
-      }
-
-      const correctAbs = {
-        x: parentBlock.position.x + n.position.x,
-        y: parentBlock.position.y + n.position.y,
-      }
-
-      const lostParent = n.parentId !== expectedParent
-      const absWrong = !n.positionAbsolute || Math.abs(n.positionAbsolute.x - correctAbs.x) > 0.1
-
-      if (lostParent || absWrong) {
-        fixes.push({ id: n.id, parentId: expectedParent, correctAbs })
-      }
-    })
+  //   const fixes: any[] = []
+  //   const nodesSnapshot = getNodes()
     
-    if (fixes.length && !fixingRef.current) {
-      fixingRef.current = true
-      logger.warn(`Integrity-check: fixing ${fixes.length} child nodes`, { fixes })
+  //   // Create set of nodes that are actively being dragged
+  //   const draggedNodeIds = new Set<string>();
+  //   document.querySelectorAll('.react-flow__node.react-flow__node--dragging').forEach(node => {
+  //     const nodeId = node.getAttribute('data-id');
+  //     if (nodeId) draggedNodeIds.add(nodeId);
+  //   });
 
-      // Apply fixes directly, without requestAnimationFrame
-      reactFlowInstance.setNodes((nds) =>
-        nds.map((node) => {
-          const f = fixes.find((fx) => fx.id === node.id)
-          if (!f) return node
-          if (!f.parentId) {
-            updateBlockPosition(f.id, f.correctAbs) // keep store & RF in sync
-            return { ...node, position: f.correctAbs, positionAbsolute: f.correctAbs }
-          }
-          return {
-            ...node,
-            parentId: f.parentId ?? undefined,
-            extent: f.parentId ? ('parent' as const) : undefined,
-            positionAbsolute: f.correctAbs,
-            data: { ...node.data, parentId: f.parentId, _absolutePosition: f.correctAbs },
-          }
-        }),
-      )
+  //   nodesSnapshot.forEach((n) => {
+  //     // Skip nodes that are currently being dragged by the user
+  //     if (draggedNodeIds.has(n.id)) {
+  //       return;
+  //     }
       
-      // Update positions in store
-      fixes.forEach((f) => updateBlockPosition(f.id, f.correctAbs))
-      
-      // Release lock after update
-      fixingRef.current = false
-    }
-  }, [getNodes, blocks, reactFlowInstance, updateBlockPosition])
+  //     const storeBlock = blocks[n.id]
+  //     const expectedParent = storeBlock?.data?.parentId
 
-  // Updated onNodesChange handler with improved parent-child relationship handling
+  //     // Root & group nodes — absolute must equal their own position
+  //     if (!expectedParent) {
+  //       const correctAbs = { x: n.position.x, y: n.position.y }
+  //       if (!n.positionAbsolute || Math.abs(n.positionAbsolute.x - correctAbs.x) > 0.1) {
+  //         fixes.push({ id: n.id, parentId: undefined, correctAbs })
+  //       }
+  //       return
+  //     }
+
+  //     // Child nodes
+  //     const parentBlock = blocks[expectedParent]
+  //     if (!parentBlock) return
+
+  //     if (!n.positionAbsolute) {
+  //       // React Flow hasn't assigned absolute yet; skip this iteration.
+  //       return;
+  //     }
+
+  //     const correctAbs = {
+  //       x: parentBlock.position.x + n.position.x,
+  //       y: parentBlock.position.y + n.position.y,
+  //     }
+
+  //     const lostParent = n.parentId !== expectedParent
+  //     const absWrong = !n.positionAbsolute || Math.abs(n.positionAbsolute.x - correctAbs.x) > 0.1
+
+  //     if (lostParent || absWrong) {
+  //       fixes.push({ id: n.id, parentId: expectedParent, correctAbs })
+  //     }
+  //   })
+    
+  //   if (fixes.length && !fixingRef.current) {
+  //     fixingRef.current = true
+  //     logger.warn(`Integrity-check: fixing ${fixes.length} child nodes`, { fixes })
+
+  //     // Apply fixes directly, without requestAnimationFrame
+  //     reactFlowInstance.setNodes((nds) =>
+  //       nds.map((node) => {
+  //         const f = fixes.find((fx) => fx.id === node.id)
+  //         if (!f) return node
+  //         if (!f.parentId) {
+  //           updateBlockPosition(f.id, f.correctAbs) // keep store & RF in sync
+  //           return { ...node, position: f.correctAbs, positionAbsolute: f.correctAbs }
+  //         }
+  //         return {
+  //           ...node,
+  //           parentId: f.parentId ?? undefined,
+  //           extent: f.parentId ? ('parent' as const) : undefined,
+  //           positionAbsolute: f.correctAbs,
+  //           data: { ...node.data, parentId: f.parentId, _absolutePosition: f.correctAbs },
+  //         }
+  //       }),
+  //     )
+      
+  //     // Update positions in store
+  //     fixes.forEach((f) => updateBlockPosition(f.id, f.correctAbs))
+      
+  //     // Release lock after update
+  //     fixingRef.current = false
+  //   }
+  // }, [getNodes, blocks, reactFlowInstance, updateBlockPosition])
+
+  // Simplified onNodesChange handler
   const onNodesChange = useCallback(
     (changes: any) => {
       if (!Array.isArray(changes) || changes.length === 0) return;
@@ -497,7 +509,8 @@ function WorkflowContent() {
       const movedParentIds = new Set<string>();
       
       changes.forEach((c: any) => {
-        if (c.type === 'position') {
+        if (c.type === 'position' && c.dragging) {
+          // Track parent nodes
           const blk = blocks[c.id];
           if (blk?.type === 'loop') {
             movedParentIds.add(c.id);
@@ -506,30 +519,34 @@ function WorkflowContent() {
         }
       });
 
-      // Process position changes for parent nodes first
+      // Process position changes
       changes.forEach((change: any) => {
         if (change.type !== 'position' || !change.position) return;
 
         const block = blocks[change.id];
         if (!block) return;
         
-        // Only process parent nodes or nodes without parents here
+        // Get parentId
         const parentId = block.data?.parentId;
+        
+        // For child nodes being dragged within parent
         if (parentId) {
-          // Skip child nodes that will be moved by the updateBlockPosition logic
+          // If parent is being moved, let ReactFlow handle child positions
           if (movedParentIds.has(parentId)) {
             return;
           }
           
-          // For child nodes with stationary parents, calculate correct absolute position
-          const parentPos = blocks[parentId].position;
-          const absolute = {
-            x: parentPos.x + change.position.x,
-            y: parentPos.y + change.position.y,
-          };
-          updateBlockPosition(change.id, absolute);
+          // For child nodes with stationary parents, calculate absolute position
+          const parentPos = blocks[parentId]?.position;
+          if (parentPos) {
+            const absolute = {
+              x: parentPos.x + change.position.x,
+              y: parentPos.y + change.position.y,
+            };
+            updateBlockPosition(change.id, absolute);
+          }
         } else {
-          // Handle parent nodes or independent nodes
+          // For parent/independent nodes, directly update position
           updateBlockPosition(change.id, change.position);
         }
       });
@@ -542,13 +559,8 @@ function WorkflowContent() {
           });
         }, 100);
       }
-
-      // Run child integrity check immediately, but only if not dragging or selecting
-      if (!draggingParentsRef.current.size && !isHandlingEdgeSelection.current) {
-        ensureChildIntegrity();
-      }
     },
-    [blocks, updateBlockPosition, ensureChildIntegrity],
+    [blocks, updateBlockPosition],
   );
 
   // Update the onDrop handler
@@ -688,20 +700,25 @@ function WorkflowContent() {
     }
   }, []);
 
-  // Simplified node drag start to make existing blocks draggable into a loop node
+  // Simplified node drag start handler
   const onNodeDragStart = useCallback((event: React.MouseEvent, node: any) => {
-    // Skip nodes that can't be moved to loops
-    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop' || node.parentId) {
+    // If we start dragging a group/loop node, remember its id
+    if (node.type === 'group' || node.type === 'loop') {
+      draggingParentsRef.current.add(node.id)
       return;
     }
     
-    // If we start dragging a group/loop node, remember its id so we can
-    // suppress child position events for the duration of the drag.
-    if (node.type === 'group' || node.type === 'loop') {
-      draggingParentsRef.current.add(node.id)
+    // For child nodes (with parentId), let ReactFlow handle dragging natively
+    if (node.parentId) {
+      return;
     }
-
-    // Add drag data to the node's DOM element
+    
+    // Skip starter blocks
+    if (node.data?.type === 'starter') {
+      return;
+    }
+    
+    // For standalone nodes, add drag data for potential loop transfer
     const nodeElement = domUtils.getNodeElement(node.id);
     if (nodeElement) {
       const dragData = {
@@ -714,10 +731,64 @@ function WorkflowContent() {
     }
   }, []);
 
+  // Simplified node drag handler
+  const onNodeDrag = useCallback((event: React.MouseEvent, node: any) => {
+    // If it's a child node inside a parent, let ReactFlow handle it natively
+    if (node.parentId) {
+      return;
+    }
+    
+    // Skip group/loop nodes and starter blocks
+    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop') {
+      return;
+    }
+    
+    // Original logic for highlighting potential parent loops
+    const nodeElement = domUtils.getNodeElement(node.id);
+    if (!nodeElement) return;
+    
+    const nodeRect = nodeElement.getBoundingClientRect();
+    const nodeCenterX = nodeRect.left + nodeRect.width / 2;
+    const nodeCenterY = nodeRect.top + nodeRect.height / 2;
+    
+    // Find all loop nodes and check if this node is over one
+    const loopNodes = document.querySelectorAll('.react-flow__node-group');
+    let foundLoop = false;
+    
+    for (const loopNodeEl of loopNodes) {
+      const loopId = loopNodeEl.getAttribute('data-id');
+      if (!loopId) continue;
+      
+      // Check if node is over this loop
+      const loopRect = loopNodeEl.getBoundingClientRect();
+      if (
+        nodeCenterX >= loopRect.left && 
+        nodeCenterX <= loopRect.right && 
+        nodeCenterY >= loopRect.top && 
+        nodeCenterY <= loopRect.bottom
+      ) {
+        domUtils.addDragHighlight(loopNodeEl as HTMLElement);
+        foundLoop = true;
+      } else {
+        domUtils.removeDragHighlight(loopNodeEl as HTMLElement);
+      }
+    }
+    
+    // Remove all highlights if not over any loop
+    if (!foundLoop) {
+      domUtils.removeAllHighlights();
+    }
+  }, []);
+
   // Simplified node drag stop handler
   const onNodeDragStop = useCallback((event: React.MouseEvent, node: any) => {
-    // Skip nodes that can't be moved to loops
-    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop' || node.parentId) {
+    // For child nodes, let ReactFlow handle positioning natively
+    if (node.parentId) {
+      return;
+    }
+    
+    // Skip group/loop nodes and starter blocks
+    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop') {
       return;
     }
 
@@ -761,50 +832,7 @@ function WorkflowContent() {
     if (node.type === 'group' || node.type === 'loop') {
       draggingParentsRef.current.delete(node.id)
     }
-  }, [reactFlowInstance, updateParentId]);
-
-  // Simplified node drag handler for visual feedback
-  const onNodeDrag = useCallback((event: React.MouseEvent, node: any) => {
-    // Skip nodes that can't be moved to loops
-    if (node.data?.type === 'starter' || node.type === 'group' || node.type === 'loop' || node.parentId) {
-      return;
-    }
-    
-    const nodeElement = domUtils.getNodeElement(node.id);
-    if (!nodeElement) return;
-    
-    const nodeRect = nodeElement.getBoundingClientRect();
-    const nodeCenterX = nodeRect.left + nodeRect.width / 2;
-    const nodeCenterY = nodeRect.top + nodeRect.height / 2;
-    
-    // Find all loop nodes and check if this node is over one
-    const loopNodes = document.querySelectorAll('.react-flow__node-group');
-    let foundLoop = false;
-    
-    for (const loopNodeEl of loopNodes) {
-      const loopId = loopNodeEl.getAttribute('data-id');
-      if (!loopId) continue;
-      
-      // Check if node is over this loop
-      const loopRect = loopNodeEl.getBoundingClientRect();
-      if (
-        nodeCenterX >= loopRect.left && 
-        nodeCenterX <= loopRect.right && 
-        nodeCenterY >= loopRect.top && 
-        nodeCenterY <= loopRect.bottom
-      ) {
-        domUtils.addDragHighlight(loopNodeEl as HTMLElement);
-        foundLoop = true;
-      } else {
-        domUtils.removeDragHighlight(loopNodeEl as HTMLElement);
-      }
-    }
-    
-    // Remove all highlights if not over any loop
-    if (!foundLoop) {
-      domUtils.removeAllHighlights();
-    }
-  }, []);
+  }, [updateParentId]);
 
   // Init workflow
   useEffect(() => {

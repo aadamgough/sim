@@ -1,6 +1,6 @@
 import { memo, useCallback, useState, useEffect } from 'react'
 import { Handle, NodeProps, Position, NodeResizer, useReactFlow } from 'reactflow'
-import { X, PlayCircle, ArrowDownRight } from 'lucide-react'
+import { X, PlayCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { createLogger } from '@/lib/logs/console-logger'
@@ -246,25 +246,15 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       data-node-id={id}
       data-type="group"
     >
-      {/* Critical drag handle for ReactFlow - DO NOT REMOVE */}
+      {/* Critical drag handle that controls only the loop node movement */}
       <div 
         className="absolute top-0 left-0 right-0 h-10 workflow-drag-handle cursor-move z-10"
-        style={{ opacity: 0.001 }}
-      />
-      
-      {/* Child node drag handle for ReactFlow - this enables child blocks to be dragged */}
-      <div
-        className="absolute inset-0 workflow-drag-handle"
-        style={{ 
-          opacity: 0.001,
-          pointerEvents: 'none' // This prevents it from blocking other interactions
-        }}
       />
       
       <NodeResizer 
         minWidth={800} 
         minHeight={1000}
-        isVisible={true} // Always visible
+        isVisible={true}
         lineClassName="border-primary border-2"
         handleClassName="h-4 w-4 bg-primary border-primary"
         handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
@@ -276,7 +266,6 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       <div 
         className="absolute bottom-2 right-2 w-8 h-8 flex items-center justify-center z-20 text-muted-foreground cursor-se-resize"
       >
-        <ArrowDownRight size={20} className="text-primary" />
       </div>
       
       {/* Child nodes container */}
