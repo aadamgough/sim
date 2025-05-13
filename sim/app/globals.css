@@ -457,3 +457,22 @@ input[type='search']::-ms-clear {
 .react-flow__node-group .react-flow__node {
   pointer-events: auto !important;
 }
+
+/* Child node styling */
+.react-flow__node[data-parent] {
+  border: 1px dashed #4e9eff !important;
+  transition: all 0.2s ease;
+}
+
+/* Visual feedback for nodes that are children of loops */
+.react-flow__node[data-parent]::after {
+  content: '';
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: #4e9eff;
+  z-index: 5;
+}

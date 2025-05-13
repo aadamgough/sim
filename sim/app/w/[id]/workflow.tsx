@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import ReactFlow, {
   Background,
@@ -30,76 +30,42 @@ import { Panel } from './components/panel/panel'
 import { Toolbar } from './components/toolbar/toolbar'
 import { WorkflowBlock } from './components/workflow-block/workflow-block'
 import { WorkflowEdge } from './components/workflow-edge/workflow-edge'
+// import { LoopInput } from './components/workflow-loop/components/loop-input/loop-input'
+// import { LoopLabel } from './components/workflow-loop/components/loop-label/loop-label'
+// import { createLoopNode, getRelativeLoopPosition } from './components/workflow-loop/workflow-loop'
 import { LoopNodeComponent } from '@/app/w/[id]/components/loop-node/loop-node'
 
 const logger = createLogger('Workflow')
 
-// Utility functions for DOM operations and parent-child relationships
-const domUtils = {
-  // Get DOM element for a node by ID
-  getNodeElement: (id: string): HTMLElement | null => {
-    return document.querySelector(`[data-id="${id}"]`);
-  },
-  
-  // Add drag highlighting to a node
-  addDragHighlight: (nodeElement: HTMLElement | null) => {
-    if (!nodeElement) return;
-    nodeElement.classList.add('loop-node-drag-over');
-    nodeElement.classList.add('dragging-over');
-  },
-  
-  // Remove drag highlighting from a node
-  removeDragHighlight: (nodeElement: HTMLElement | null) => {
-    if (!nodeElement) return;
-    nodeElement.classList.remove('loop-node-drag-over');
-    nodeElement.classList.remove('dragging-over');
-  },
-  
-  // Remove highlighting from all loop nodes
-  removeAllHighlights: () => {
-    document.querySelectorAll('.react-flow__node-group.dragging-over, .loop-node-drag-over, .dragging-over')
-      .forEach(node => {
-        node.classList.remove('loop-node-drag-over');
-        node.classList.remove('dragging-over');
-      });
-  },
-  
-  // Clean up any leftover drag data attributes
-  clearDragData: (nodeElement: HTMLElement | null) => {
-    if (nodeElement && nodeElement.hasAttribute('data-drag-data')) {
-      nodeElement.removeAttribute('data-drag-data');
-    }
-  }
-};
-
-// Define custom node and edge types outside the component
-const defaultNodeTypes = {
+// Define custom node and edge types
+const nodeTypes: NodeTypes = {
   workflowBlock: WorkflowBlock,
-  group: LoopNodeComponent,
-  loop: LoopNodeComponent,
+  // loopLabel: LoopLabel,
+  // loopInput: LoopInput,
+  loopNode: LoopNodeComponent,
 }
-
-const defaultEdgeTypes = { workflowEdge: WorkflowEdge }
+const edgeTypes: EdgeTypes = { workflowEdge: WorkflowEdge }
 
 function WorkflowContent() {
   // State
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
-  const { isCollapsed: isSidebarCollapsed } = useSidebarStore()
-
-  // Memoize node and edge types to prevent re-creation on each render
-  const nodeTypes = useMemo<NodeTypes>(() => defaultNodeTypes, []);
-  const edgeTypes = useMemo<EdgeTypes>(() => defaultEdgeTypes, []);
+  // State for tracking node dragging
+  const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null)
+  const [potentialParentId, setPotentialParentId] = useState<string | null>(null)
+  // const { mode, isExpanded } = useSidebarStore()
+  // In hover mode, act as if sidebar is always collapsed for layout purposes
+  // const isSidebarCollapsed =
+  //   mode === 'expanded' ? !isExpanded : mode === 'collapsed' || mode === 'hover'
 
   // Hooks
   const params = useParams()
   const router = useRouter()
   const { project, getNodes } = useReactFlow()
-  const reactFlowInstance = useReactFlow()
 
   // Store access
   const { workflows, setActiveWorkflow, createWorkflow } = useWorkflowRegistry()
-  const { blocks, edges, addBlock, updateBlockPosition, addEdge, removeEdge, updateParentId } =
+  const { blocks, edges, loops, addBlock, updateBlockPosition, addEdge, removeEdge, updateParentId } =
     useWorkflowStore()
   const { setValue: setSubBlockValue } = useSubBlockStore()
   const { markAllAsRead } = useNotificationStore()
@@ -108,15 +74,6 @@ function WorkflowContent() {
   // Execution and debug mode state
   const { activeBlockIds, pendingBlocks } = useExecutionStore()
   const { isDebugModeEnabled } = useGeneralStore()
-
-  // Track group nodes that are currently being dragged so we can ignore
-  // synthetic child position events that React-Flow emits while the parent
-  // is moving.  This prevents us from overwriting the child positions that
-  // we already updated in the store when the parent moved.
-  const draggingParentsRef = useRef<Set<string>>(new Set())
-
-  // Track whether we're currently handling edge selection to prevent unnecessary position fixing
-  const isHandlingEdgeSelection = useRef(false);
 
   // Initialize workflow
   useEffect(() => {
@@ -184,8 +141,7 @@ function WorkflowContent() {
   // Listen for toolbar block click events
   useEffect(() => {
     const handleAddBlockFromToolbar = (event: CustomEvent) => {
-      const { type, clientX, clientY } = event.detail
-      logger.info('Handling add block from toolbar:', { type, clientX, clientY })
+      const { type } = event.detail
 
       if (!type) return
       if (type === 'connectionBlock') return
@@ -198,39 +154,19 @@ function WorkflowContent() {
 
       // Special handling for loop nodes
       if (type === 'loop') {
-        logger.info('Creating loop node from toolbar')
         const id = crypto.randomUUID()
-        const name = `Loop ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
-
-        // Add the loop block to the workflow with proper configuration
+        const name = 'Loop'
+        
+        // Add the loop node with default dimensions
         addBlock(id, type, name, centerPosition, {
           width: 800,
           height: 1000,
-          loopType: 'for',
-          count: 5,
-          collection: '',
+          type: 'loopNode'
         })
-
-        // Auto-connect logic
-        const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
-        if (isAutoConnectEnabled) {
-          const closestBlock = findClosestOutput(centerPosition)
-          if (closestBlock) {
-            const sourceHandle = determineSourceHandle(closestBlock)
-            addEdge({
-              id: crypto.randomUUID(),
-              source: closestBlock.id,
-              target: id,
-              sourceHandle,
-              targetHandle: 'target',
-              type: 'workflowEdge',
-            })
-          }
-        }
+        
         return
       }
 
-      // Regular block handling
       const blockConfig = getBlock(type)
       if (!blockConfig) {
         logger.error('Invalid block type:', { type })
@@ -260,7 +196,7 @@ function WorkflowContent() {
             target: id,
             sourceHandle,
             targetHandle: 'target',
-            type: 'workflowEdge',
+            type: 'custom',
           })
         }
       }
@@ -276,280 +212,15 @@ function WorkflowContent() {
     }
   }, [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle])
 
-  // Transform blocks and loops into ReactFlow nodes
-  const nodes = useMemo(() => {
-    const nodeArray: any[] = []
-
-    // Add block nodes
-    Object.entries(blocks).forEach(([blockId, block]) => {
-      if (!block.type || !block.name) {
-        logger.warn(`Skipping invalid block: ${blockId}`, { block })
-        return
-      }
-
-      // Handle loop nodes
-      if (block.type === 'loop') {
-        nodeArray.push({
-          id: block.id,
-          type: 'loop',
-          position: block.position,
-          positionAbsolute: { x: block.position.x, y: block.position.y },
-          style: {
-            width: block.data?.width || 800,
-            height: block.data?.height || 1000,
-            backgroundColor: 'transparent',
-            border: 'none',
-            boxShadow: 'none',
-            outline: 'none',
-          },
-          data: {
-            ...block.data,
-            label: block.name,
-            loopType: block.data?.loopType || 'for',
-            count: block.data?.count || 5,
-            collection: block.data?.collection || '',
-            width: block.data?.width || 800,
-            height: block.data?.height || 1000,
-          },
-        })
-        return
-      }
-
-      const blockConfig = getBlock(block.type)
-      if (!blockConfig) {
-        logger.error(`No configuration found for block type: ${block.type}`, {
-          block,
-        })
-        return
-      }
-
-      const isActive = activeBlockIds.has(block.id)
-      const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
-
-      // Process parent-child relationships
-      const parentId = block.data?.parentId;
-      
-      // Handle child nodes (nodes inside a loop)
-      if (parentId && blocks[parentId]) {
-        const parentBlock = blocks[parentId];
-        // Calculate position relative to parent
-        const relativePosition = {
-            x: block.position.x - parentBlock.position.x,
-            y: block.position.y - parentBlock.position.y,
-        };
-
-        // Create child node with parent relationship
-        nodeArray.push({
-          id: block.id,
-          type: 'workflowBlock',
-          position: relativePosition,
-          draggable: true,
-          extent: 'parent',
-          parentId,
-          data: {
-            type: block.type,
-            config: blockConfig,
-            name: block.name,
-            isActive,
-            isPending,
-            _relativePosition: {...relativePosition},
-            _absolutePosition: {...block.position},
-            parentId,
-            extent: 'parent',
-            isChildNode: true
-          },
-        });
-        return;
-      }
-      
-      // Create regular node (not a child of any loop)
-      nodeArray.push({
-        id: block.id,
-        type: 'workflowBlock',
-        position: block.position,
-        draggable: true,
-        data: {
-          type: block.type,
-          config: blockConfig,
-          name: block.name,
-          isActive,
-          isPending,
-          positionAbsolute: { x: block.position.x, y: block.position.y },
-        },
-      });
-    })
-
-    return nodeArray
-  }, [blocks, activeBlockIds, pendingBlocks, isDebugModeEnabled])
-
-  // After the nodes useMemo, add this effect to log when nodes change
-  useEffect(() => {
-    // Find all parent-child relationships to validate they're set correctly
-    const childNodes = nodes.filter(node => node.parentId);
-    if (childNodes.length > 0) {
-      logger.info('Current parent-child relationships:', {
-        childCount: childNodes.length,
-        relationships: childNodes.map(node => ({
-          nodeId: node.id,
-          nodeType: node.data?.type || node.type,
-          parentId: node.parentId,
-          relativePosition: node.position
-        }))
-      });
-    }
-  }, [nodes]);
-
-  // Force Parent-Child Consistency - ensures child nodes maintain correct positions
-  const ensureChildPositions = useCallback(() => {
-    if (isHandlingEdgeSelection.current) return;
-    
-    const allNodes = getNodes();
-    const parentNodes = allNodes.filter(node => node.type === 'loop');
-    const childNodes = allNodes.filter(node => node.parentId);
-    
-    if (childNodes.length === 0) return;
-    
-    // Build parent position map
-    const parentPositions: Record<string, { x: number; y: number }> = {};
-    parentNodes.forEach(parent => {
-      parentPositions[parent.id] = parent.position;
-    });
-    
-    // Check and fix child nodes
-    let needsFix = false;
-    const fixedNodes = childNodes.map(child => {
-      const parentId = child.parentId as string;
-      const parentPos = parentPositions[parentId];
-      if (!parentPos) return child;
-      
-      // Get stored positions from the store
-      const storeBlock = blocks[child.id];
-      if (!storeBlock?.data) return child;
-      
-      // Get expected relative position
-      const expectedRelPos = storeBlock.data._relativePosition || {
-        x: storeBlock.position.x - blocks[parentId].position.x,
-        y: storeBlock.position.y - blocks[parentId].position.y
-      };
-      
-      // Check if current position matches expected
-      if (Math.abs(child.position.x - expectedRelPos.x) > 0.1 ||
-          Math.abs(child.position.y - expectedRelPos.y) > 0.1) {
-        needsFix = true;
-        return {
-          ...child,
-          position: { ...expectedRelPos },
-          positionAbsolute: {
-            x: parentPos.x + expectedRelPos.x,
-            y: parentPos.y + expectedRelPos.y
-          }
-        };
-      }
-      
-      return child;
-    });
-    
-    if (needsFix) {
-      // Apply position fixes
-      logger.info('Fixing child node positions that drifted from expected values');
-      reactFlowInstance.setNodes(nodes => {
-        const nonChildNodes = nodes.filter(n => !n.parentId);
-        return [...nonChildNodes, ...fixedNodes];
-      });
-    }
-  }, [blocks, getNodes, reactFlowInstance]);
-
-  // Simplified onNodesChange handler
-  const onNodesChange = useCallback(
-    (changes: any) => {
-      if (!Array.isArray(changes) || changes.length === 0) return;
-
-      // Skip processing if we're handling edge selection
-      if (isHandlingEdgeSelection.current) {
-        return;
-      }
-
-      // Track parent nodes being moved in this batch
-      const movedParentIds = new Set<string>();
-      
-      changes.forEach((c: any) => {
-        if (c.type === 'position' && c.dragging) {
-          // Track parent nodes
-          const blk = blocks[c.id];
-          if (blk?.type === 'loop') {
-            movedParentIds.add(c.id);
-            draggingParentsRef.current.add(c.id);
-          }
-        }
-      });
-
-      // Process position changes
-      changes.forEach((change: any) => {
-        if (change.type !== 'position' || !change.position) return;
-
-        const block = blocks[change.id];
-        if (!block) return;
-        
-        // Get parentId
-        const parentId = block.data?.parentId;
-        
-        // For child nodes being dragged within parent
-        if (parentId) {
-          // If parent is being moved, let ReactFlow handle child positions
-          if (movedParentIds.has(parentId)) {
-            return;
-          }
-          
-          // For child nodes with stationary parents, calculate absolute position
-          const parentPos = blocks[parentId]?.position;
-          if (parentPos) {
-            const absolute = {
-              x: parentPos.x + change.position.x,
-              y: parentPos.y + change.position.y,
-            };
-            updateBlockPosition(change.id, absolute);
-          }
-        } else {
-          // For parent/independent nodes, directly update position
-          updateBlockPosition(change.id, change.position);
-        }
-      });
-      
-      // Release the dragging parents lock after a short delay
-      if (movedParentIds.size > 0) {
-        setTimeout(() => {
-          movedParentIds.forEach(id => {
-            draggingParentsRef.current.delete(id);
-          });
-        }, 100);
-      }
-    },
-    [blocks, updateBlockPosition],
-  );
-
   // Update the onDrop handler
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault()
 
-      // If the drop target is a loop node, let the loop node handle it
-      const loopNodeElement = (event.target as HTMLElement).closest('.react-flow__node-group')
-      if (loopNodeElement) {
-        return
-      }
-
       try {
-        const rawData = event.dataTransfer.getData('application/json')
-        if (!rawData) return;
-        
-        const data = JSON.parse(rawData)
-        const type = data.type || (data.data && data.data.type)
-        
-        if (!type || type === 'connectionBlock' || type === 'starter') {
-          return
-        }
-        
-        // Calculate drop position in ReactFlow coordinates
+        const data = JSON.parse(event.dataTransfer.getData('application/json'))
+        if (data.type === 'connectionBlock') return
+
         const reactFlowBounds = event.currentTarget.getBoundingClientRect()
         const position = project({
           x: event.clientX - reactFlowBounds.left,
@@ -557,58 +228,41 @@ function WorkflowContent() {
         })
 
         // Special handling for loop nodes
-        if (type === 'loop') {
+        if (data.type === 'loop') {
           const id = crypto.randomUUID()
-          const name = `Loop ${Object.values(blocks).filter((b) => b.type === type).length + 1}`
-
-          // Add the loop with proper configuration
-          addBlock(id, type, name, position, {
+          const name = 'Loop'
+          
+          // Add the loop node with default dimensions
+          addBlock(id, data.type, name, position, {
             width: 800,
             height: 1000,
-            loopType: 'for',
-            count: 5,
-            collection: '',
+            type: 'loopNode'
           })
-
-          // Auto-connect logic
-          const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
-          if (isAutoConnectEnabled) {
-            const closestBlock = findClosestOutput(position)
-            if (closestBlock) {
-              const sourceHandle = determineSourceHandle(closestBlock)
-              addEdge({
-                id: crypto.randomUUID(),
-                source: closestBlock.id,
-                target: id,
-                sourceHandle,
-                targetHandle: 'target',
-                type: 'workflowEdge',
-              })
-            }
-          }
-
-          logger.info('Dropped loop block:', { id, name, position })
-
+          
           return
         }
 
-        // Regular block handling
-        const blockConfig = getBlock(type)
-        if (!blockConfig) return;
+        const blockConfig = getBlock(data.type)
+        if (!blockConfig) {
+          logger.error('Invalid block type:', { data })
+          return
+        }
 
         const id = crypto.randomUUID()
         const name = `${blockConfig.name} ${
-          Object.values(blocks).filter((b) => b.type === type).length + 1
+          Object.values(blocks).filter((b) => b.type === data.type).length + 1
         }`
 
-        addBlock(id, type, name, position)
+        addBlock(id, data.type, name, position)
 
         // Auto-connect logic
         const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
-        if (isAutoConnectEnabled && type !== 'starter') {
+        if (isAutoConnectEnabled && data.type !== 'starter') {
           const closestBlock = findClosestOutput(position)
           if (closestBlock) {
+            // Get appropriate source handle
             const sourceHandle = determineSourceHandle(closestBlock)
+
             addEdge({
               id: crypto.randomUUID(),
               source: closestBlock.id,
@@ -619,184 +273,12 @@ function WorkflowContent() {
             })
           }
         }
-        logger.info('Dropped block:', { id, name, position })
-      } 
-      catch (err) {
+      } catch (err) {
         logger.error('Error dropping block:', { err })
       }
     },
     [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle]
   )
-
-  // Update the onDragOver handler
-  const onDragOver = useCallback((event: React.DragEvent) => {
-    event.preventDefault()
-    
-    // Let loop nodes handle their own highlighting
-    const loopNode = (event.target as HTMLElement).closest('.react-flow__node-group')
-    if (!loopNode) return;
-    
-    try {
-        const rawData = event.dataTransfer.getData('application/json')
-      if (!rawData) return;
-      
-          const data = JSON.parse(rawData)
-          const type = data.type || (data.data && data.data.type)
-          
-          // Only highlight if it's not a starter block
-          if (type && type !== 'starter' && type !== 'connectionBlock') {
-            loopNode.classList.add('dragging-over')
-      }
-    } catch (error) {
-      logger.error('Error in onDragOver:', { error })
-    }
-  }, [])
-
-  // Update the onDragEnd handler
-  const onDragEnd = useCallback(() => {
-    // Remove highlighting from all loop nodes
-    domUtils.removeAllHighlights();
-    
-    // Clean up any leftover drag data
-    const nodeToClear = document.querySelector('[data-drag-data]');
-    if (nodeToClear) {
-      nodeToClear.removeAttribute('data-drag-data');
-    }
-  }, []);
-
-  // Simplified node drag start handler
-  const onNodeDragStart = useCallback((event: React.MouseEvent, node: any) => {
-    // If we start dragging a group/loop node, remember its id
-    if (node.type === 'loop') {
-      draggingParentsRef.current.add(node.id)
-      return;
-    }
-    
-    // For child nodes (with parentId), let ReactFlow handle dragging natively
-    if (node.parentId) {
-      return;
-    }
-    
-    // Skip starter blocks
-    if (node.data?.type === 'starter') {
-      return;
-    }
-    
-    // For standalone nodes, add drag data for potential loop transfer
-    const nodeElement = domUtils.getNodeElement(node.id);
-    if (nodeElement) {
-      const dragData = {
-        type: node.data?.type,
-        id: node.id,
-        isExistingNode: true
-      };
-      
-      nodeElement.setAttribute('data-drag-data', JSON.stringify(dragData));
-    }
-  }, []);
-
-  // Simplified node drag handler
-  const onNodeDrag = useCallback((event: React.MouseEvent, node: any) => {
-    // If it's a child node inside a parent, let ReactFlow handle it natively
-    if (node.parentId) {
-      return;
-    }
-    
-    // Skip group/loop nodes and starter blocks
-    if (node.data?.type === 'starter' || node.type === 'loop') { //removed node.type === 'group'
-      return;
-    }
-    
-    // Original logic for highlighting potential parent loops
-    const nodeElement = domUtils.getNodeElement(node.id);
-    if (!nodeElement) return;
-    
-    const nodeRect = nodeElement.getBoundingClientRect();
-    const nodeCenterX = nodeRect.left + nodeRect.width / 2;
-    const nodeCenterY = nodeRect.top + nodeRect.height / 2;
-    
-    // Find all loop nodes and check if this node is over one
-    const loopNodes = document.querySelectorAll('.react-flow__node-group');
-    let foundLoop = false;
-    
-    for (const loopNodeEl of loopNodes) {
-      const loopId = loopNodeEl.getAttribute('data-id');
-      if (!loopId) continue;
-      
-      // Check if node is over this loop
-      const loopRect = loopNodeEl.getBoundingClientRect();
-      if (
-        nodeCenterX >= loopRect.left && 
-        nodeCenterX <= loopRect.right && 
-        nodeCenterY >= loopRect.top && 
-        nodeCenterY <= loopRect.bottom
-      ) {
-        domUtils.addDragHighlight(loopNodeEl as HTMLElement);
-        foundLoop = true;
-      } else {
-        domUtils.removeDragHighlight(loopNodeEl as HTMLElement);
-      }
-    }
-    
-    // Remove all highlights if not over any loop
-    if (!foundLoop) {
-      domUtils.removeAllHighlights();
-    }
-  }, []);
-
-  // Simplified node drag stop handler
-  const onNodeDragStop = useCallback((event: React.MouseEvent, node: any) => {
-    // For child nodes, let ReactFlow handle positioning natively
-    if (node.parentId) {
-      return;
-    }
-    
-    // Skip group/loop nodes and starter blocks
-    if (node.data?.type === 'starter' || node.type === 'loop') { //removed node.type === 'group'
-      return;
-    }
-
-    // Clean up any visual effects
-    domUtils.removeAllHighlights();
-
-    // Get node center point for loop detection
-    const nodeElement = domUtils.getNodeElement(node.id);
-    if (!nodeElement) return;
-
-    const nodeRect = nodeElement.getBoundingClientRect();
-    const nodeCenterX = nodeRect.left + nodeRect.width / 2;
-    const nodeCenterY = nodeRect.top + nodeRect.height / 2;
-
-    // Find all loop nodes and check if this node is over one
-    const loopNodes = document.querySelectorAll('.react-flow__node-group');
-    
-    for (const loopNodeEl of loopNodes) {
-      const loopId = loopNodeEl.getAttribute('data-id');
-      if (!loopId) continue;
-
-      // Check if node center is within loop node bounds
-      const loopRect = loopNodeEl.getBoundingClientRect();
-      if (
-        nodeCenterX >= loopRect.left && 
-        nodeCenterX <= loopRect.right && 
-        nodeCenterY >= loopRect.top && 
-        nodeCenterY <= loopRect.bottom
-      ) {
-        // Update the parent relationship
-        updateParentId(node.id, loopId, 'parent');
-        
-        break;
-      }
-    }
-    
-    // Clean up any leftover drag data
-    domUtils.clearDragData(nodeElement);
-
-    // Clear the dragging flag for group/loop nodes
-    if ( node.type === 'loop') { //removed node.type === 'group'
-      draggingParentsRef.current.delete(node.id)
-    }
-  }, [updateParentId]);
 
   // Init workflow
   useEffect(() => {
@@ -854,6 +336,117 @@ function WorkflowContent() {
     resetVariablesLoaded,
   ])
 
+  // Transform blocks and loops into ReactFlow nodes
+  const nodes = useMemo(() => {
+    const nodeArray: any[] = []
+
+    // Comment out all loop-related code
+    // // Add loop group nodes and their labels
+    // Object.entries(loops).forEach(([loopId, loop]) => {
+    //   const loopNodes = createLoopNode({ loopId, loop, blocks })
+    //   if (loopNodes) {
+    //     // Add both the loop node and its label node
+    //     nodeArray.push(...loopNodes)
+    //   }
+    // })
+
+    // Add loop node
+    
+    // Add block nodes
+    Object.entries(blocks).forEach(([blockId, block]) => {
+      if (!block.type || !block.name) {
+        logger.warn(`Skipping invalid block: ${blockId}`, { block })
+        return
+      }
+
+      // Handle loop nodes differently
+      if (block.type === 'loop') {
+        nodeArray.push({
+          id: block.id,
+          type: 'loopNode',
+          position: block.position,
+          dragHandle: '.workflow-drag-handle',
+          data: {
+            ...block.data,
+            width: block.data?.width || 800,
+            height: block.data?.height || 1000,
+          },
+        })
+        return
+      }
+
+      const blockConfig = getBlock(block.type)
+      if (!blockConfig) {
+        logger.error(`No configuration found for block type: ${block.type}`, {
+          block,
+        })
+        return
+      }
+
+      // Comment out all parentLoop-related code
+      // const parentLoop = Object.entries(loops).find(([_, loop]) => loop.nodes.includes(block.id))
+      let position = block.position
+
+      // Comment out position calculation for loop nodes
+      // if (parentLoop) {
+      //   const [loopId] = parentLoop
+      //   const loopNode = nodeArray.find((node) => node.id === `loop-${loopId}`)
+      //   if (loopNode) {
+      //     position = getRelativeLoopPosition(block.position, loopNode.position)
+      //   }
+      // }
+
+      const isActive = activeBlockIds.has(block.id)
+      const isPending = isDebugModeEnabled && pendingBlocks.includes(block.id)
+
+      nodeArray.push({
+        id: block.id,
+        type: 'workflowBlock',
+        position,
+        // parentId: parentLoop ? `loop-${parentLoop[0]}` : undefined,
+        parentId: block.data?.parentId, // ReactFlow uses this to establish parent-child relationship
+        extent: block.data?.extent || undefined, // 'parent' means child is confined to parent bounds
+        dragHandle: '.workflow-drag-handle',
+        data: {
+          type: block.type,
+          config: blockConfig,
+          name: block.name,
+          isActive,
+          isPending,
+        },
+      })
+    })
+
+    return nodeArray
+  }, [blocks, /*loops,*/ activeBlockIds, pendingBlocks, isDebugModeEnabled])
+
+  // Update nodes
+  const onNodesChange = useCallback(
+    (changes: any) => {
+      changes.forEach((change: any) => {
+        if (change.type === 'position' && change.position) {
+          const node = nodes.find((n) => n.id === change.id)
+          if (!node) return
+
+          // Comment out parentId-related position calculation
+          // if (node.parentId) {
+          //   const loopNode = nodes.find((n) => n.id === node.parentId)
+          //   if (loopNode) {
+          //     const absolutePosition = {
+          //       x: change.position.x + loopNode.position.x,
+          //       y: change.position.y + loopNode.position.y,
+          //     }
+          //     updateBlockPosition(change.id, absolutePosition)
+          //   }
+          // } else {
+            updateBlockPosition(change.id, change.position)
+          // }
+        }
+      })
+    },
+    [nodes, updateBlockPosition]
+  )
+
   // Update edges
   const onEdgesChange = useCallback(
     (changes: any) => {
@@ -870,364 +463,237 @@ function WorkflowContent() {
   const onConnect = useCallback(
     (connection: any) => {
       if (connection.source && connection.target) {
-        // 1. First, capture current state before we do anything
-        const allNodes = getNodes();
-        const childNodeMap = new Map();
-        
-        // Capture ALL nodes with their parents and positions
-        allNodes.forEach(node => {
-          if (node.parentId) {
-            const parentNode = allNodes.find(p => p.id === node.parentId);
-            if (parentNode) {
-              childNodeMap.set(node.id, {
-                childId: node.id,
-                childPosition: { ...node.position },
-                parentId: node.parentId,
-                parentPosition: { ...parentNode.position }
-              });
-            }
-          }
-        });
-        
-        // 2. Set the flag to indicate we're handling edge operation
-        isHandlingEdgeSelection.current = true;
-        
-        // 3. Calculate expected absolute positions for all child nodes
-        const expectedPositions = new Map();
-        childNodeMap.forEach((info, nodeId) => {
-          expectedPositions.set(nodeId, {
-            absolute: {
-              x: info.parentPosition.x + info.childPosition.x,
-              y: info.parentPosition.y + info.childPosition.y
-            },
-            relative: { ...info.childPosition }
-          });
-        });
-        
-        // 4. Add the edge - this will trigger ReactFlow's rerender
         addEdge({
           ...connection,
           id: crypto.randomUUID(),
           type: 'workflowEdge',
-        });
-        
-        // 5. Run an immediate position check/correction
-        queueMicrotask(() => {
-          // Get nodes post-edge addition to see what changed
-          const updatedNodes = getNodes();
-          let positionsFixed = 0;
-          
-          // Fix any nodes that lost their proper positioning
-          reactFlowInstance.setNodes(nodes => 
-            nodes.map(node => {
-              // Only process child nodes
-              if (!node.parentId) return node;
-              
-              const expectedPos = expectedPositions.get(node.id);
-              if (!expectedPos) return node;
-              
-              // Find the current parent node
-              const parentNode = updatedNodes.find(p => p.id === node.parentId);
-              if (!parentNode) return node;
-              
-              // Check if position is significantly different from expected
-              if (Math.abs(node.position.x - expectedPos.relative.x) > 0.1 || 
-                  Math.abs(node.position.y - expectedPos.relative.y) > 0.1) {
-                
-                positionsFixed++;
-                // Log detailed fix information
-                logger.info(`Fixing child node ${node.id} position during edge creation`, {
-                  current: node.position,
-                  expected: expectedPos.relative,
-                  parentId: node.parentId
-                });
-                
-                // Return fixed node
-                return {
-                  ...node,
-                  position: { ...expectedPos.relative },
-                  positionAbsolute: {
-                    x: parentNode.position.x + expectedPos.relative.x,
-                    y: parentNode.position.y + expectedPos.relative.y
-                  }
-                };
-              }
-              
-              return node;
-            })
-          );
-          
-          if (positionsFixed > 0) {
-            logger.info(`Fixed positions for ${positionsFixed} child nodes during edge creation`);
-          }
-          
-          // Clear flag after position fixes
-          isHandlingEdgeSelection.current = false;
-        });
+        })
       }
     },
-    [addEdge, getNodes, reactFlowInstance]
-  );
+    [addEdge]
+  )
 
   // Update onPaneClick to only handle edge selection
   const onPaneClick = useCallback(() => {
     setSelectedEdgeId(null)
   }, [])
 
-  // Helper to check if an edge is within a loop
-  const isEdgeWithinLoop = useCallback((edge: any, nodes: any[]) => {
-    const sourceNode = nodes.find(n => n.id === edge.source);
-    const targetNode = nodes.find(n => n.id === edge.target);
-    
-    return sourceNode?.parentId && 
-      targetNode?.parentId && 
-      sourceNode.parentId === targetNode.parentId;
-  }, []);
-  
-  // Lightweight edge wrapper: only selection/delete handling – no manual node repair here
-  const createEdgeWithCustomDelete = useCallback((edge: any) => ({
+  // Edge selection
+  const onEdgeClick = useCallback((event: React.MouseEvent, edge: any) => {
+    setSelectedEdgeId(edge.id)
+  }, [])
+
+  // Transform edges to include selection state
+  const edgesWithSelection = edges.map((edge) => ({
     ...edge,
     type: edge.type || 'workflowEdge',
     data: {
       selectedEdgeId,
-      isWithinLoop: isEdgeWithinLoop(edge, getNodes()),
-      isLoopStartEdge: edge.sourceHandle === 'loop-start-source',
       onDelete: (edgeId: string) => {
-        logger.info(`Deleting edge: ${edgeId}`)
         removeEdge(edgeId)
         setSelectedEdgeId(null)
       },
     },
-  }), [selectedEdgeId, isEdgeWithinLoop, getNodes, removeEdge]);
-  
-  // Transform edges to include selection state
-  const edgesWithSelection = useMemo(() => 
-    edges.map(edge => createEdgeWithCustomDelete(edge)), 
-    [edges, createEdgeWithCustomDelete]
-  );
+  }))
 
-  // Update onEdgeClick to properly handle edge selection without affecting child positions
-  const onEdgeClick = useCallback((event: React.MouseEvent, edge: any) => {
-    event.stopPropagation();
-    
-    console.log('----------- EDGE SELECTION START -----------');
-    
-    // 1. Log initial state
-    const beforeNodes = getNodes();
-    const childNodesBefore = beforeNodes.filter(node => node.parentId);
-    
-    console.log('Before selection - All nodes count:', beforeNodes.length);
-    console.log('Before selection - Child nodes count:', childNodesBefore.length);
-    
-    console.log('Child nodes before selection:', childNodesBefore.map(node => ({
-      id: node.id,
-      type: node.type,
-      parentId: node.parentId,
-      position: { ...node.position },
-      positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : 'undefined'
-    })));
-    
-    // 1. First, capture current state before we do anything
-    const allNodes = getNodes();
-    const childNodeMap = new Map();
-    
-    // Capture ALL nodes with their parents and positions
-    allNodes.forEach(node => {
-      if (node.parentId) {
-        const parentNode = allNodes.find(p => p.id === node.parentId);
-        if (parentNode) {
-          childNodeMap.set(node.id, {
-            childId: node.id,
-            childPosition: { ...node.position },
-            parentId: node.parentId,
-            parentPosition: { ...parentNode.position }
-          });
-        }
-      }
-    });
-    
-    // 2. Set the flag to indicate we're handling edge selection
-    isHandlingEdgeSelection.current = true;
-    
-    // 3. Calculate expected absolute positions for all child nodes
-    const expectedPositions = new Map();
-    childNodeMap.forEach((info, nodeId) => {
-      expectedPositions.set(nodeId, {
-        absolute: {
-          x: info.parentPosition.x + info.childPosition.x,
-          y: info.parentPosition.y + info.childPosition.y
-        },
-        relative: { ...info.childPosition }
-      });
-    });
-    
-    console.log('Expected positions for child nodes:', Object.fromEntries(expectedPositions));
-    
-    // 4. Update selected edge - this will trigger ReactFlow's rerender
-    setSelectedEdgeId(edge.id);
-    
-    // 5. Run an immediate position check/correction
-    queueMicrotask(() => {
-      // Get nodes post-selection to see what changed
-      const updatedNodes = getNodes();
-      const childNodesAfter = updatedNodes.filter(node => node.parentId);
-      
-      console.log('After selection - All nodes count:', updatedNodes.length);
-      console.log('After selection - Child nodes count:', childNodesAfter.length);
-      
-      console.log('Child nodes after selection:', childNodesAfter.map(node => ({
-        id: node.id,
-        type: node.type,
-        parentId: node.parentId,
-        position: { ...node.position },
-        positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : 'undefined',
-        hasChanged: expectedPositions.has(node.id) ? 
-          Math.abs(node.position.x - expectedPositions.get(node.id).relative.x) > 0.1 ||
-          Math.abs(node.position.y - expectedPositions.get(node.id).relative.y) > 0.1 : 'N/A'
-      })));
-      
-      // Check if any child nodes disappeared
-      const beforeIds = new Set(childNodesBefore.map(n => n.id));
-      const afterIds = new Set(childNodesAfter.map(n => n.id));
-      
-      const missingNodes = [...beforeIds].filter(id => !afterIds.has(id));
-      const newNodes = [...afterIds].filter(id => !beforeIds.has(id));
-      
-      if (missingNodes.length > 0) {
-        console.log('ALERT: Some child nodes disappeared after edge selection:', missingNodes);
-      }
-      
-      if (newNodes.length > 0) {
-        console.log('ALERT: New child nodes appeared after edge selection:', newNodes);
-      }
-      
-      let positionsFixed = 0;
-      
-      // Fix any nodes that lost their proper positioning
-      reactFlowInstance.setNodes(nodes => 
-        nodes.map(node => {
-          // Only process child nodes
-          if (!node.parentId) return node;
-          
-          const expectedPos = expectedPositions.get(node.id);
-          if (!expectedPos) {
-            console.log('No expected position found for child node:', node.id);
-            return node;
-          }
-          
-          // Find the current parent node
-          const parentNode = updatedNodes.find(p => p.id === node.parentId);
-          if (!parentNode) {
-            console.log('Parent node not found for child:', node.id, 'parentId:', node.parentId);
-            return node;
-          }
-          
-          // Check if position is significantly different from expected
-          const positionChanged = 
-            Math.abs(node.position.x - expectedPos.relative.x) > 0.1 || 
-            Math.abs(node.position.y - expectedPos.relative.y) > 0.1;
-            
-          if (positionChanged) {
-            positionsFixed++;
-            
-            console.log('Fixing child node position:', {
-              nodeId: node.id,
-              current: { ...node.position },
-              expected: { ...expectedPos.relative },
-              delta: {
-                x: node.position.x - expectedPos.relative.x,
-                y: node.position.y - expectedPos.relative.y
-              }
-            });
-            
-            // Return fixed node
-            return {
-              ...node,
-              position: { ...expectedPos.relative },
-              positionAbsolute: {
-                x: parentNode.position.x + expectedPos.relative.x,
-                y: parentNode.position.y + expectedPos.relative.y
-              }
-            };
-          }
-          
-          return node;
-        })
-      );
-      
-      if (positionsFixed > 0) {
-        console.log(`Fixed positions for ${positionsFixed} child nodes during edge selection`);
-      }
-      
-      // Log final state
-      const finalNodes = getNodes();
-      const finalChildNodes = finalNodes.filter(node => node.parentId);
-      
-      console.log('Final child nodes after fixes:', finalChildNodes.map(node => ({
-        id: node.id,
-        position: { ...node.position },
-        positionAbsolute: node.positionAbsolute ? { ...node.positionAbsolute } : 'undefined'
-      })));
-      
-      console.log('----------- EDGE SELECTION END -----------');
-      
-      // Clear flag after position fixes
-      isHandlingEdgeSelection.current = false;
-    });
-  }, [getNodes, reactFlowInstance, setSelectedEdgeId]);
-
-  // Keyboard shortcuts: delete selected edge
+  // Handle keyboard shortcuts
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedEdgeId) {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedEdgeId) {
         removeEdge(selectedEdgeId)
         setSelectedEdgeId(null)
       }
     }
+
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [selectedEdgeId, removeEdge])
 
-  // Listen for sub-block value updates
+  // Handle sub-block value updates from custom events
   useEffect(() => {
-    const handler = (event: CustomEvent) => {
-      const { blockId, subBlockId, value } = event.detail as any
+    const handleSubBlockValueUpdate = (event: CustomEvent) => {
+      const { blockId, subBlockId, value } = event.detail
       if (blockId && subBlockId) {
         setSubBlockValue(blockId, subBlockId, value)
       }
     }
-    window.addEventListener('update-subblock-value', handler as EventListener)
-    return () => window.removeEventListener('update-subblock-value', handler as EventListener)
+
+    window.addEventListener('update-subblock-value', handleSubBlockValueUpdate as EventListener)
+
+    return () => {
+      window.removeEventListener(
+        'update-subblock-value',
+        handleSubBlockValueUpdate as EventListener
+      )
+    }
   }, [setSubBlockValue])
 
-  // Run position checks periodically to ensure child nodes stay in correct positions
-  useEffect(() => {
-    // Skip position checks if there are no loop nodes
-    const hasLoopNodes = Object.values(blocks).some(block => block.type === 'loop');
-    if (!hasLoopNodes) return;
-    
-    // Check positions after any operation that might affect them
-    const checkPositionsAfterUserAction = () => {
-      if (!isHandlingEdgeSelection.current) {
-        ensureChildPositions();
+  // Handle node drag to detect intersections with loop nodes
+  const onNodeDrag = useCallback(
+    (event: React.MouseEvent, node: any) => {
+      // Skip if dragging a loop node (loops can't be children)
+      if (node.type === 'loopNode') return;
+      
+      // Store currently dragged node ID
+      setDraggedNodeId(node.id)
+      
+      // Find intersections with loop nodes
+      const intersectingNodes = getNodes().filter(n => {
+        // Only consider loop nodes that aren't the dragged node
+        if (n.type !== 'loopNode' || n.id === node.id) return false
+        
+        // Get more accurate node dimensions - can be improved with dynamic size detection
+        const nodeWidth = node.type === 'condition' ? 250 : 200;
+        const nodeHeight = node.type === 'condition' ? 150 : 100;
+        
+        // Check if node is within the bounds of the loop node
+        const nodeRect = { 
+          left: node.position.x, 
+          right: node.position.x + nodeWidth,
+          top: node.position.y, 
+          bottom: node.position.y + nodeHeight
+        }
+        
+        const loopRect = {
+          left: n.position.x,
+          right: n.position.x + (n.data?.width || 800),
+          top: n.position.y,
+          bottom: n.position.y + (n.data?.height || 1000)
+        }
+        
+        return (
+          nodeRect.left < loopRect.right &&
+          nodeRect.right > loopRect.left &&
+          nodeRect.top < loopRect.bottom &&
+          nodeRect.bottom > loopRect.top
+        )
+      })
+      
+      // Update potential parent if there's at least one intersecting loop node
+      if (intersectingNodes.length > 0) {
+        // Find smallest loop (for handling nested loops)
+        const smallestLoop = intersectingNodes.sort((a, b) => {
+          const aSize = (a.data?.width || 800) * (a.data?.height || 1000)
+          const bSize = (b.data?.width || 800) * (b.data?.height || 1000)
+          return aSize - bSize
+        })[0]
+        
+        // Set potential parent and add visual indicator
+        setPotentialParentId(smallestLoop.id)
+        
+        // Add highlight class
+        const loopElement = document.querySelector(`[data-id="${smallestLoop.id}"]`)
+        if (loopElement) {
+          loopElement.classList.add('dragging-over')
+        }
+      } else {
+        // Remove highlighting if no longer over a loop
+        if (potentialParentId) {
+          const prevElement = document.querySelector(`[data-id="${potentialParentId}"]`)
+          if (prevElement) {
+            prevElement.classList.remove('dragging-over')
+          }
+          setPotentialParentId(null)
+        }
       }
-    };
-    
-    // Set up listeners for operations that might disrupt positions
-    window.addEventListener('mouseup', checkPositionsAfterUserAction);
-    
-    // Periodic check as an additional safety measure
-    const intervalId = setInterval(() => {
-      if (!isHandlingEdgeSelection.current) {
-        ensureChildPositions();
+    },
+    [getNodes, potentialParentId]
+  )
+
+  // Handle node drag stop to establish parent-child relationships
+  const onNodeDragStop = useCallback(
+    (event: React.MouseEvent, node: any) => {
+      // Skip if dragging a loop node (loops can't be children)
+      if (node.type === 'loopNode') {
+        setDraggedNodeId(null)
+        return
       }
-    }, 2000); // Check every 2 seconds
-    
-    return () => {
-      window.removeEventListener('mouseup', checkPositionsAfterUserAction);
-      clearInterval(intervalId);
-    };
-  }, [blocks, ensureChildPositions]);
+      
+      logger.info('Node drag stopped', { 
+        nodeId: node.id, 
+        potentialParentId,
+        nodeType: node.type 
+      })
+      
+      // Find intersections with loop nodes
+      const intersectingNodes = getNodes().filter(n => {
+        // Only consider loop nodes that aren't the dragged node
+        if (n.type !== 'loopNode' || n.id === node.id) return false
+        
+        // Get more accurate node dimensions - can be improved with dynamic size detection
+        const nodeWidth = node.type === 'condition' ? 250 : 200;
+        const nodeHeight = node.type === 'condition' ? 150 : 100;
+        
+        // Check if node is within the bounds of the loop node
+        const nodeRect = { 
+          left: node.position.x, 
+          right: node.position.x + nodeWidth,
+          top: node.position.y, 
+          bottom: node.position.y + nodeHeight
+        }
+        
+        const loopRect = {
+          left: n.position.x,
+          right: n.position.x + (n.data?.width || 800),
+          top: n.position.y,
+          bottom: n.position.y + (n.data?.height || 1000)
+        }
+        
+        return (
+          nodeRect.left < loopRect.right &&
+          nodeRect.right > loopRect.left &&
+          nodeRect.top < loopRect.bottom &&
+          nodeRect.bottom > loopRect.top
+        )
+      })
+      
+      // Remove all highlight classes
+      document.querySelectorAll('.dragging-over').forEach(el => {
+        el.classList.remove('dragging-over')
+      })
+      
+      // If intersecting with loops, establish parent-child relationship
+      if (intersectingNodes.length > 0) {
+        // Find smallest loop (for handling nested loops)
+        const smallestLoop = intersectingNodes.sort((a, b) => {
+          const aSize = (a.data?.width || 800) * (a.data?.height || 1000)
+          const bSize = (b.data?.width || 800) * (b.data?.height || 1000)
+          return aSize - bSize
+        })[0]
+        
+        // Calculate position relative to parent
+        const relativePosition = {
+          x: node.position.x - smallestLoop.position.x,
+          y: node.position.y - smallestLoop.position.y
+        }
+        
+        logger.info('Setting parent-child relationship', {
+          blockId: node.id,
+          parentId: smallestLoop.id,
+          relativePosition
+        })
+        
+        // Update parent relationship with relative position
+        updateBlockPosition(node.id, relativePosition);
+        updateParentId(node.id, smallestLoop.id, 'parent')
+      } else if (blocks[node.id]?.data?.parentId) {
+        // If node was in a loop but is now outside, handle removal
+        // This depends on your store implementation
+        logger.info('Node dragged out of loop - parent relationship should be removed', {
+          blockId: node.id,
+          currentParentId: blocks[node.id]?.data?.parentId
+        })
+        
+        // For now, we keep the node where it is
+        // You may want to handle this case based on your store implementation
+      }
+      
+      // Reset drag state
+      setDraggedNodeId(null)
+      setPotentialParentId(null)
+    },
+    [getNodes, potentialParentId, blocks, updateParentId, updateBlockPosition]
+  )
 
   if (!isInitialized) {
     return (
@@ -1239,12 +705,14 @@ function WorkflowContent() {
 
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden">
-      <div className={`transition-all duration-200 ${isSidebarCollapsed ? 'ml-14' : 'ml-60'}`}>
+      {/* Add back in ${isSidebarCollapsed ? 'ml-14' : 'ml-60'} */}
+      <div className={`transition-all duration-200`}>
         <ControlBar />
-        <Toolbar />
       </div>
+      <Toolbar />
+      {/* Add back in ${isSidebarCollapsed ? 'pl-14' : 'pl-60'} */}
       <div
-        className={`flex-1 relative w-full h-full transition-all duration-200 ${isSidebarCollapsed ? 'pl-14' : 'pl-60'}`}
+        className={`flex-1 relative w-full h-full transition-all duration-200`}
       >
         <Panel />
         <NotificationList />
@@ -1256,55 +724,43 @@ function WorkflowContent() {
           onConnect={onConnect}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          
-          // Node properties
-          nodeOrigin={[0.5, 0.5]}
-          nodesConnectable={true}
-          nodesDraggable={true}
-          nodesFocusable={false}
-          
-          // Event handlers
           onDrop={onDrop}
-          onDragOver={onDragOver}
-          onDragEnd={onDragEnd}
-          onNodeDragStart={onNodeDragStart}
-          onNodeDragStop={onNodeDragStop}
-          onNodeDrag={onNodeDrag}
-          onPaneClick={onPaneClick}
-          onEdgeClick={onEdgeClick}
-          onNodeClick={(e) => {
-            e.stopPropagation()
-            e.preventDefault()
-          }}
-          
-          // View properties
+          onDragOver={(e) => e.preventDefault()}
           fitView
           minZoom={0.1}
           maxZoom={1.3}
           panOnScroll
-          selectNodesOnDrag={false}
-          
-          // Edge properties
           defaultEdgeOptions={{ type: 'custom' }}
-          elevateEdgesOnSelect={false}
+          proOptions={{ hideAttribution: true }}
           connectionLineStyle={{
             stroke: '#94a3b8',
             strokeWidth: 2,
             strokeDasharray: '5,5',
           }}
           connectionLineType={ConnectionLineType.SmoothStep}
-          edgesFocusable={false}
-          edgesUpdatable={true}
-          
-          // Misc properties
-          proOptions={{ hideAttribution: true }}
+          onNodeClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+          }}
+          onPaneClick={onPaneClick}
+          onEdgeClick={onEdgeClick}
+          elementsSelectable={true}
+          selectNodesOnDrag={false}
+          nodesConnectable={true}
+          nodesDraggable={true}
           draggable={false}
           noWheelClassName="allow-scroll"
-          elementsSelectable={true}
+          edgesFocusable={true}
+          edgesUpdatable={true}
           className="workflow-container h-full"
-          nodeExtent={[[-10000, -10000], [10000, 10000]]}
+          onNodeDrag={onNodeDrag}
+          onNodeDragStop={onNodeDragStop}
           snapToGrid={false}
           snapGrid={[20, 20]}
+          elevateEdgesOnSelect={true}
+          elevateNodesOnSelect={true}
+          autoPanOnConnect={true}
+          autoPanOnNodeDrag={true}
         >
           <Background />
         </ReactFlow>

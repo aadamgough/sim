@@ -134,67 +134,83 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
         workflowSync.sync()
       },
 
-      updateBlockPosition: (id: string, position: Position) => {
-        const block = get().blocks[id];
-        if (!block) return;
+      // updateBlockPosition: (id: string, position: Position) => {
+      //   const block = get().blocks[id];
+      //   if (!block) return;
         
-        // Skip update if position hasn't changed significantly
-        const currentPosition = block.position;
-        const positionChanged = 
-          Math.abs(currentPosition.x - position.x) > 0.1 || 
-          Math.abs(currentPosition.y - position.y) > 0.1;
+      //   // Skip update if position hasn't changed significantly
+      //   const currentPosition = block.position;
+      //   const positionChanged = 
+      //     Math.abs(currentPosition.x - position.x) > 0.1 || 
+      //     Math.abs(currentPosition.y - position.y) > 0.1;
           
-        if (!positionChanged) return;
+      //   if (!positionChanged) return;
         
-        // Calculate deltas for child updates
-        const deltaX = position.x - currentPosition.x;
-        const deltaY = position.y - currentPosition.y;
+      //   // Calculate deltas for child updates
+      //   const deltaX = position.x - currentPosition.x;
+      //   const deltaY = position.y - currentPosition.y;
         
-        const isLoopNode = block.type === 'loop';
-        const hasParent = block.data?.parentId !== undefined;
+      //   const isLoopNode = block.type === 'loop';
+      //   const hasParent = block.data?.parentId !== undefined;
 
-        // Prepare updated blocks map
-        const updatedBlocks = {
-          ...get().blocks,
-          [id]: {
-            ...block,
-            position, // Store absolute position
-            data: {
-              ...block.data,
-              _absolutePosition: { ...position } // Also store in data for recovery
-            }
-          },
-        };
+      //   // Prepare updated blocks map
+      //   const updatedBlocks = {
+      //     ...get().blocks,
+      //     [id]: {
+      //       ...block,
+      //       position, // Store absolute position
+      //       data: {
+      //         ...block.data,
+      //         _absolutePosition: { ...position } // Also store in data for recovery
+      //       }
+      //     },
+      //   };
 
-        // Update child nodes with both absolute and relative positions
-        if (isLoopNode) {
-          Object.values(get().blocks).forEach((child) => {
-            if (child.data?.parentId === id) {
-              const childRelativePos = {
-                x: child.position.x - currentPosition.x,
-                y: child.position.y - currentPosition.y
-              };
+      //   // Update child nodes with both absolute and relative positions
+      //   if (isLoopNode) {
+      //     Object.values(get().blocks).forEach((child) => {
+      //       if (child.data?.parentId === id) {
+      //         const childRelativePos = {
+      //           x: child.position.x - currentPosition.x,
+      //           y: child.position.y - currentPosition.y
+      //         };
               
-              updatedBlocks[child.id] = {
-                ...child,
-                position: {
-                  x: position.x + childRelativePos.x,
-                  y: position.y + childRelativePos.y,
-                },
-                data: {
-                  ...child.data,
-                  _relativePosition: childRelativePos,
-                  _absolutePosition: {
-                    x: position.x + childRelativePos.x,
-                    y: position.y + childRelativePos.y,
-                  }
-                }
-              };
-            }
-          });
-        }
+      //         updatedBlocks[child.id] = {
+      //           ...child,
+      //           position: {
+      //             x: position.x + childRelativePos.x,
+      //             y: position.y + childRelativePos.y,
+      //           },
+      //           data: {
+      //             ...child.data,
+      //             _relativePosition: childRelativePos,
+      //             _absolutePosition: {
+      //               x: position.x + childRelativePos.x,
+      //               y: position.y + childRelativePos.y,
+      //             }
+      //           }
+      //         };
+      //       }
+      //     });
+      //   }
 
-        set({ blocks: updatedBlocks as any });
+      //   set({ blocks: updatedBlocks as any });
+      // },
+      
+      updateBlockPosition: (id: string, position: Position) => {
+        set((state) => ({
+          blocks: {
+            ...state.blocks,
+            [id]: {
+              ...state.blocks[id],
+              position,
+            },
+          },
+          edges: [...state.edges],
+        }))
+        get().updateLastSaved()
+
+        // No sync here as this is a frequent operation during dragging
       },
 
       updateNodeDimensions: (id: string, dimensions: { width: number; height: number }) => {
@@ -238,14 +254,22 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
           return;
         }
         
+        // Store current absolute position
         const absolutePosition = { ...block.position };
-        // The store always keeps absolute coordinates. We therefore leave
-        // block.position untouched. React Flow will convert this to a
-        // relative coordinate every render (see workflow.tsx nodes useMemo).
-
-        const bufferPosition = {
-          x: absolutePosition.x + 400,
-          y: absolutePosition.y + 500
+        
+        // Handle empty or null parentId (removing from parent)
+        const newData = !parentId 
+          ? { ...block.data } // Remove parentId and extent if empty
+          : { 
+              ...block.data, 
+              parentId, 
+              extent 
+            };
+            
+        // Remove parentId and extent properties for empty parent ID
+        if (!parentId && newData.parentId) {
+          delete newData.parentId;
+          delete newData.extent;
         }
 
         const newState = {
@@ -253,27 +277,22 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
             ...get().blocks,
             [id]: {
               ...block,
-              position: bufferPosition,
-              data: {
-                ...block.data,
-                parentId,
-                extent,
-              }
+              position: absolutePosition, // Keep absolute position the same
+              data: newData
             },
           },
           edges: [...get().edges],
           loops: { ...get().loops },
         };
         
-        console.log('[WorkflowStore/updateParentId] Updated parentId – keeping absolute position unchanged:', {
+        console.log('[WorkflowStore/updateParentId] Updated parentId relationship:', {
           blockId: id,
-          absolutePosition,
-          originalPos: block.position,
-          storeIn: 'block.position (absolute)'
+          newParentId: parentId || 'None (removed parent)',
+          keepingPosition: absolutePosition
         });
         
         set(newState);
-        pushHistory(set, get, newState, `Set parent for ${block.name}`);
+        pushHistory(set, get, newState, parentId ? `Set parent for ${block.name}` : `Remove parent for ${block.name}`);
         get().updateLastSaved();
         workflowSync.sync();
       },
