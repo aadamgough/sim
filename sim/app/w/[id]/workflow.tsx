@@ -75,6 +75,51 @@ function WorkflowContent() {
   const { activeBlockIds, pendingBlocks } = useExecutionStore()
   const { isDebugModeEnabled } = useGeneralStore()
 
+  // Helper function to check if a point is inside a loop node
+  const isPointInLoopNode = useCallback((position: { x: number, y: number }): { 
+    loopId: string, 
+    loopPosition: { x: number, y: number },
+    dimensions: { width: number, height: number } 
+  } | null => {
+    // Find loops that contain this position point
+    const containingLoops = getNodes()
+      .filter(n => n.type === 'loopNode')
+      .filter(n => {
+        const loopRect = {
+          left: n.position.x,
+          right: n.position.x + (n.data?.width || 800),
+          top: n.position.y,
+          bottom: n.position.y + (n.data?.height || 1000)
+        };
+        
+        return (
+          position.x >= loopRect.left &&
+          position.x <= loopRect.right &&
+          position.y >= loopRect.top &&
+          position.y <= loopRect.bottom
+        );
+      })
+      .map(n => ({
+        loopId: n.id,
+        loopPosition: n.position,
+        dimensions: {
+          width: n.data?.width || 800,
+          height: n.data?.height || 1000
+        }
+      }));
+      
+    // Sort by area (smallest first) in case of nested loops
+    if (containingLoops.length > 0) {
+      return containingLoops.sort((a, b) => {
+        const aArea = a.dimensions.width * a.dimensions.height;
+        const bArea = b.dimensions.width * b.dimensions.height;
+        return aArea - bArea;
+      })[0];
+    }
+    
+    return null;
+  }, [getNodes]);
+
   // Initialize workflow
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -212,7 +257,7 @@ function WorkflowContent() {
     }
   }, [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle])
 
-  // Update the onDrop handler
+  // Handle drops
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault()
@@ -227,8 +272,18 @@ function WorkflowContent() {
           y: event.clientY - reactFlowBounds.top,
         })
 
+        // Check if dropping inside a loop node
+        const loopInfo = isPointInLoopNode(position);
+        
+        // Clear any drag-over styling
+        document.querySelectorAll('.loop-node-drag-over').forEach(el => {
+          el.classList.remove('loop-node-drag-over');
+        });
+        document.body.style.cursor = '';
+
         // Special handling for loop nodes
         if (data.type === 'loop') {
+          // Don't allow loops to be created inside other loops
           const id = crypto.randomUUID()
           const name = 'Loop'
           
@@ -253,32 +308,133 @@ function WorkflowContent() {
           Object.values(blocks).filter((b) => b.type === data.type).length + 1
         }`
 
-        addBlock(id, data.type, name, position)
-
-        // Auto-connect logic
-        const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled
-        if (isAutoConnectEnabled && data.type !== 'starter') {
-          const closestBlock = findClosestOutput(position)
-          if (closestBlock) {
-            // Get appropriate source handle
-            const sourceHandle = determineSourceHandle(closestBlock)
-
-            addEdge({
-              id: crypto.randomUUID(),
-              source: closestBlock.id,
-              target: id,
-              sourceHandle,
-              targetHandle: 'target',
-              type: 'workflowEdge',
-            })
+        if (loopInfo) {
+          // Calculate position relative to the loop node
+          const relativePosition = {
+            x: position.x - loopInfo.loopPosition.x,
+            y: position.y - loopInfo.loopPosition.y
+          };
+          
+          // Add block with parent info
+          addBlock(id, data.type, name, relativePosition, {
+            parentId: loopInfo.loopId,
+            extent: 'parent'
+          });
+          
+          logger.info('Added block inside loop', {
+            blockId: id,
+            blockType: data.type,
+            loopId: loopInfo.loopId,
+            relativePosition
+          });
+          
+          // Auto-connect logic for blocks inside loops
+          const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled;
+          if (isAutoConnectEnabled && data.type !== 'starter') {
+            // Try to find other nodes in the loop to connect to
+            const loopNodes = getNodes().filter(n => n.parentId === loopInfo.loopId);
+            
+            if (loopNodes.length > 0) {
+              // Connect to the closest node in the loop
+              const closestNode = loopNodes
+                .map(n => ({
+                  id: n.id,
+                  distance: Math.sqrt(
+                    Math.pow(n.position.x - relativePosition.x, 2) +
+                    Math.pow(n.position.y - relativePosition.y, 2)
+                  )
+                }))
+                .sort((a, b) => a.distance - b.distance)[0];
+              
+              if (closestNode) {
+                // Get appropriate source handle
+                const sourceNode = getNodes().find(n => n.id === closestNode.id);
+                const sourceType = sourceNode?.data?.type;
+                
+                // Default source handle
+                let sourceHandle = 'source';
+                
+                // For condition blocks, use the condition-true handle
+                if (sourceType === 'condition') {
+                  sourceHandle = 'condition-true';
+                }
+                
+                addEdge({
+                  id: crypto.randomUUID(),
+                  source: closestNode.id,
+                  target: id,
+                  sourceHandle,
+                  targetHandle: 'target',
+                  type: 'workflowEdge',
+                });
+              }
+            }
+          }
+        } else {
+          // Regular canvas drop
+          addBlock(id, data.type, name, position);
+          
+          // Regular auto-connect logic
+          const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled;
+          if (isAutoConnectEnabled && data.type !== 'starter') {
+            const closestBlock = findClosestOutput(position);
+            if (closestBlock) {
+              const sourceHandle = determineSourceHandle(closestBlock);
+              
+              addEdge({
+                id: crypto.randomUUID(),
+                source: closestBlock.id,
+                target: id,
+                sourceHandle,
+                targetHandle: 'target',
+                type: 'workflowEdge',
+              });
+            }
           }
         }
       } catch (err) {
         logger.error('Error dropping block:', { err })
       }
     },
-    [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle]
+    [project, blocks, addBlock, addEdge, findClosestOutput, determineSourceHandle, isPointInLoopNode, getNodes]
   )
+
+  // Handle drag over for ReactFlow canvas
+  const onDragOver = useCallback((event: React.DragEvent) => {
+    event.preventDefault();
+    
+    // Only handle toolbar items
+    if (!event.dataTransfer?.types.includes('application/json')) return;
+    
+    try {
+      const reactFlowBounds = event.currentTarget.getBoundingClientRect();
+      const position = project({
+        x: event.clientX - reactFlowBounds.left,
+        y: event.clientY - reactFlowBounds.top,
+      });
+      
+      // Check if hovering over a loop node
+      const loopInfo = isPointInLoopNode(position);
+      
+      // Clear any previous highlighting
+      document.querySelectorAll('.loop-node-drag-over').forEach(el => {
+        el.classList.remove('loop-node-drag-over');
+      });
+      
+      // If hovering over a loop node, highlight it
+      if (loopInfo) {
+        const loopElement = document.querySelector(`[data-id="${loopInfo.loopId}"]`);
+        if (loopElement) {
+          loopElement.classList.add('loop-node-drag-over');
+          document.body.style.cursor = 'copy';
+        }
+      } else {
+        document.body.style.cursor = '';
+      }
+    } catch (err) {
+      logger.error('Error in onDragOver', { err });
+    }
+  }, [project, isPointInLoopNode]);
 
   // Init workflow
   useEffect(() => {
@@ -726,7 +882,7 @@ function WorkflowContent() {
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onDrop={onDrop}
-          onDragOver={(e) => e.preventDefault()}
+          onDragOver={onDragOver}
           fitView
           minZoom={0.1}
           maxZoom={1.3}
