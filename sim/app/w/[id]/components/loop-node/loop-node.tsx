@@ -41,7 +41,7 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         overflow: 'visible',
         border: data?.state === 'valid' ? '2px solid #40E0D0' : '2px dashed #94a3b8',
         backgroundColor: data?.state === 'valid' ? 'rgba(34,197,94,0.05)' : 'transparent',
-        transition: 'border-color 0.2s ease-in-out, background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
+        transition: 'width 0.2s ease-out, height 0.2s ease-out, border-color 0.2s ease-in-out, background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
       }}
       onDragOver={(e) => {
         e.preventDefault();
@@ -61,22 +61,11 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
         }
       }}
       data-node-id={id}
-      data-type="group"
+      data-type="loopNode"
     >
       {/* Critical drag handle that controls only the loop node movement */}
       <div 
         className="absolute top-0 left-0 right-0 h-10 workflow-drag-handle cursor-move z-10"
-      />
-      
-      <NodeResizer 
-        minWidth={800} 
-        minHeight={1000}
-        isVisible={true}
-        lineClassName="border-primary border-2"
-        handleClassName="h-4 w-4 bg-primary border-primary"
-        handleStyle={{ opacity: 1, visibility: 'visible', zIndex: 100 }}
-        keepAspectRatio={false}
-        onResize={handleResize}
       />
       
       {/* Custom visible resize handle */}

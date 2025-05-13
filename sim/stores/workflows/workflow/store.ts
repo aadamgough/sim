@@ -214,7 +214,7 @@ export const useWorkflowStore = create<WorkflowStoreWithHistory>()(
             ...get().blocks,
             [id]: {
               ...block,
-              position: absolutePosition, // Keep absolute position the same
+              position: absolutePosition,
               data: newData
             },
           },

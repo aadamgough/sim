@@ -34,6 +34,7 @@ import { WorkflowEdge } from './components/workflow-edge/workflow-edge'
 // import { LoopLabel } from './components/workflow-loop/components/loop-label/loop-label'
 // import { createLoopNode, getRelativeLoopPosition } from './components/workflow-loop/workflow-loop'
 import { LoopNodeComponent } from '@/app/w/[id]/components/loop-node/loop-node'
+import { debounce } from 'lodash'
 
 const logger = createLogger('Workflow')
 
@@ -119,6 +120,78 @@ function WorkflowContent() {
     
     return null;
   }, [getNodes]);
+
+  // Helper function to calculate proper dimensions for a loop node based on its children
+  const calculateLoopDimensions = useCallback((loopId: string): { width: number, height: number } => {
+    // Default minimum dimensions
+    const minWidth = 800;
+    const minHeight = 1000;
+    
+    // Get all child nodes of this loop
+    const childNodes = getNodes().filter(node => node.parentId === loopId);
+    
+    if (childNodes.length === 0) {
+      return { width: minWidth, height: minHeight };
+    }
+    
+    // Calculate the bounding box that contains all children
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    
+    childNodes.forEach(node => {
+      // Get accurate node dimensions
+      const nodeWidth = node.type === 'condition' ? 250 : 200;
+      const nodeHeight = node.type === 'condition' ? 350 : 200;
+      
+      minX = Math.min(minX, node.position.x);
+      minY = Math.min(minY, node.position.y);
+      maxX = Math.max(maxX, node.position.x + nodeWidth);
+      maxY = Math.max(maxY, node.position.y + nodeHeight);
+    });
+    
+    // Add padding around the bounding box (give extra space on the right/bottom)
+    const padding = 200;
+    
+    // Ensure the width and height are never less than the minimums
+    const width = Math.max(minWidth, maxX + padding);
+    const height = Math.max(minHeight, maxY + padding);
+    
+    return { width, height };
+  }, [getNodes]);
+  
+  // Function to resize all loop nodes 
+  const resizeLoopNodes = useCallback(() => {
+    // Find all loop nodes
+    const loopNodes = getNodes().filter(node => node.type === 'loopNode');
+    
+    // Resize each loop node based on its children
+    loopNodes.forEach(loopNode => {
+      const dimensions = calculateLoopDimensions(loopNode.id);
+      
+      // Only update if dimensions have changed (to avoid unnecessary updates)
+      if (dimensions.width !== loopNode.data?.width || 
+          dimensions.height !== loopNode.data?.height) {
+        logger.info('Resizing loop node', {
+          loopId: loopNode.id,
+          newDimensions: dimensions,
+          oldDimensions: {
+            width: loopNode.data?.width,
+            height: loopNode.data?.height
+          }
+        });
+        // Use the updateNodeDimensions from the workflow store
+        useWorkflowStore.getState().updateNodeDimensions(loopNode.id, dimensions);
+      }
+    });
+  }, [getNodes, calculateLoopDimensions]);
+  
+  // Create a debounced version of resizeLoopNodes to avoid too many updates
+  const debouncedResizeLoopNodes = useMemo(
+    () => debounce(resizeLoopNodes, 100), 
+    [resizeLoopNodes]
+  );
 
   // Initialize workflow
   useEffect(() => {
@@ -327,6 +400,9 @@ function WorkflowContent() {
             loopId: loopInfo.loopId,
             relativePosition
           });
+          
+          // Resize the loop node to fit the new block
+          setTimeout(() => debouncedResizeLoopNodes(), 50);
           
           // Auto-connect logic for blocks inside loops
           const isAutoConnectEnabled = useGeneralStore.getState().isAutoConnectEnabled;
@@ -580,6 +656,20 @@ function WorkflowContent() {
     [removeEdge]
   )
 
+  // Effect to resize loops when nodes change (add/remove/position change)
+  useEffect(() => {
+    // Skip during initial render when nodes aren't loaded yet
+    if (nodes.length === 0) return;
+    
+    // Resize all loops to fit their children
+    debouncedResizeLoopNodes();
+    
+    // Clean up on unmount
+    return () => {
+      debouncedResizeLoopNodes.cancel();
+    };
+  }, [nodes, debouncedResizeLoopNodes]);
+
   // Handle connections
   const onConnect = useCallback(
     (connection: any) => {
@@ -813,7 +903,7 @@ function WorkflowContent() {
         
         // Check if the node is already a child of this loop
         if (currentParentId === smallestLoop.id) {
-          // Node is already a child of this loop, just update its position within the parent
+          // Node is already a child of this loop, just updating position
           logger.info('Node already a child of this loop, just updating position', {
             blockId: node.id,
             parentId: smallestLoop.id,
@@ -822,6 +912,9 @@ function WorkflowContent() {
           
           // Only update the position, not the parent relationship
           updateBlockPosition(node.id, relativePosition);
+          
+          // Resize the loop after moving the child
+          setTimeout(() => debouncedResizeLoopNodes(), 50);
         } else {
           // Node is not a child of this loop yet, establish the relationship
           logger.info('Setting new parent-child relationship', {
@@ -833,6 +926,9 @@ function WorkflowContent() {
           // Update both position and parent relationship
           updateBlockPosition(node.id, relativePosition);
           updateParentId(node.id, smallestLoop.id, 'parent');
+          
+          // Resize the loop to accommodate the new child
+          setTimeout(() => debouncedResizeLoopNodes(), 50);
         }
       } else if (blocks[node.id]?.data?.parentId) {
         // If node was in a loop but is now outside, handle removal
