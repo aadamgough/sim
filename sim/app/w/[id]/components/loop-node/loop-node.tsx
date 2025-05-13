@@ -199,23 +199,16 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
       className={cn(
         'relative group-node',
         data?.state === 'valid' && 'border-[#40E0D0] bg-[rgba(34,197,94,0.05)]',
-        // isHovered && 'hover-highlight',
-        // isValidDragOver && 'drag-highlight'
       )}
-      // onMouseEnter={() => setIsHovered(true)}
-      // onMouseLeave={() => setIsHovered(false)}
       style={{
         width: data.width || 800,
         height: data.height || 1000,
-        // border: isValidDragOver ? '2px solid #40E0D0' : 
-        //         isHovered ? '2px solid #1e293b' : 
-        //         selected ? '2px solid #94a3b8' : 
-        //         '2px dashed #94a3b8',
-        // backgroundColor: isValidDragOver ? 'rgba(64,224,208,0.08)' : 'transparent',
         borderRadius: '8px',
         position: 'relative',
-        // boxShadow: isValidDragOver ? '0 0 0 3px rgba(64,224,208,0.2)' : 'none',
         overflow: 'visible',
+        border: data?.state === 'valid' ? '2px solid #40E0D0' : '2px dashed #94a3b8',
+        backgroundColor: data?.state === 'valid' ? 'rgba(34,197,94,0.05)' : 'transparent',
+        transition: 'border-color 0.2s ease-in-out, background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
       }}
       // onDrop={handleDrop}
       onDragOver={(e) => {
@@ -227,22 +220,14 @@ export const LoopNodeComponent = memo(({ data, selected, id }: NodeProps) => {
             if (rawData) {
               const data = JSON.parse(rawData);
               const type = data.type || (data.data && data.data.type);
-              
-              // if (type && type !== 'starter' && type !== 'loop' && type !== 'connectionBlock') {
-              //   setIsValidDragOver(true);
-              //   return;
-              // }
             }
           }
           
           // If we get here, no valid drag is happening
-          // setIsValidDragOver(false);
         } catch (err) {
           logger.error('Error checking dataTransfer:', err);
-          //setIsValidDragOver(false);
         }
       }}
-      // onDragLeave={() => setIsValidDragOver(false)}
       data-node-id={id}
       data-type="group"
     >

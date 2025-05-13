@@ -398,18 +398,12 @@ input[type='search']::-ms-clear {
 .loop-node-drag-over {
   animation: loop-node-pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   border-color: #40E0D0 !important;
+  border-width: 2px !important;
+  border-style: solid !important;
   background-color: rgba(64, 224, 208, 0.08) !important;
   transition: all 0.2s ease-in-out;
+  box-shadow: 0 0 0 8px rgba(64, 224, 208, 0.1);
 }
-
-/* Additional loop node styles for better hover and resize UX */
-.react-flow__node-group.dragging-over {
-  border: 2px solid #40E0D0 !important;
-  background-color: rgba(64, 224, 208, 0.08) !important;
-  animation: loop-node-pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  transition: all 0.2s ease-in-out;
-}
-
 /* Make resizer handles more visible */
 .react-flow__resize-control {
   z-index: 10;
@@ -451,11 +445,6 @@ input[type='search']::-ms-clear {
 .group-node-container:hover .react-flow__resize-control.bottom-right {
   opacity: 1 !important;
   visibility: visible !important;
-}
-
-/* Ensure child nodes stay visible */
-.react-flow__node-group .react-flow__node {
-  pointer-events: auto !important;
 }
 
 /* Child node styling */

@@ -9,9 +9,9 @@ export const LoopTool = {
   bgColor: '#40E0D0',
   data: {
     label: 'Loop',
-    loopType: 'for',     // 'for' or 'forEach'
-    count: 5,            // Number of iterations for 'for' type
-    collection: '',      // Collection reference for 'forEach' type
+    loopType: 'for',
+    count: 5,
+    collection: '',
     width: 800,
     height: 1000,
     extent: 'parent',
