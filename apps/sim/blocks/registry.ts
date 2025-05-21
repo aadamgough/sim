@@ -24,6 +24,7 @@ import { GoogleSearchBlock } from './blocks/google'
 import { GoogleDocsBlock } from './blocks/google_docs'
 import { GoogleDriveBlock } from './blocks/google_drive'
 import { GoogleSheetsBlock } from './blocks/google_sheets'
+import { MicrosoftTeamsBlock } from './blocks/microsoft_teams'
 // import { GuestyBlock } from './blocks/guesty'
 import { MemoryBlock } from './blocks/memory'
 import { ImageGeneratorBlock } from './blocks/image_generator'
@@ -80,6 +81,7 @@ export const registry: Record<string, BlockConfig> = {
   google_drive: GoogleDriveBlock,
   google_search: GoogleSearchBlock,
   google_sheets: GoogleSheetsBlock,
+  microsoft_teams: MicrosoftTeamsBlock,
   // guesty: GuestyBlock,
   image_generator: ImageGeneratorBlock,
   jina: JinaBlock,
