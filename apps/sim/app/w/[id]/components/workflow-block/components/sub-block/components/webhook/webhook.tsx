@@ -285,7 +285,11 @@ interface WebhookConfigProps {
   subBlockId?: string
   isConnecting: boolean
   isPreview?: boolean
-  value?: any
+  value?: {
+    webhookProvider?: string
+    webhookPath?: string
+    providerConfig?: ProviderConfig
+  }
 }
 
 export function WebhookConfig({ 
