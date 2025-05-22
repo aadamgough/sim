@@ -64,7 +64,6 @@ export function DeployedWorkflowModal({
   const initialDeployedStateRef = useRef<any>(null);
   
   useEffect(() => {
-    console.log('needsRedeployment', needsRedeployment)
     if (isOpen) {
       modalOpenCount.current += 1;
       
