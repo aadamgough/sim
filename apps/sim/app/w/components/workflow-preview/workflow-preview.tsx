@@ -62,10 +62,6 @@ const edgeTypes: EdgeTypes = {
   workflowEdge: WorkflowEdge,
 }
 
-// The subblocks should be getting passed from the state and not the subBlockStore. 
-// Create optional parameter boolan isPreview to pass in the block state to know how to render
-// the subblocks
-
 export function WorkflowPreview({
   workflowState,
   showSubBlocks = true,
@@ -76,14 +72,6 @@ export function WorkflowPreview({
   defaultPosition,
   defaultZoom,
 }: WorkflowPreviewProps) {
-  // Use effect to log the workflow state once outside of useMemo
-  useEffect(() => {
-    logger.info('WorkflowPreview received new state', {
-      blockCount: Object.keys(workflowState?.blocks || {}).length,
-      withSubBlocks: Object.values(workflowState?.blocks || {}).filter(b => b.subBlocks && Object.keys(b.subBlocks).length > 0).length,
-    });
-  }, [workflowState]);
-  
   // Transform blocks and loops into ReactFlow nodes
   const nodes: Node[] = useMemo(() => {
     const nodeArray: Node[] = []
@@ -136,12 +124,8 @@ export function WorkflowPreview({
           subBlockValues: subBlocksClone, // Use the deep clone to avoid reference issues
         },
       })
-      logger.info(`Preview node created: ${blockId}`, { 
-        blockType: block.type,
-        hasSubBlocks: block.subBlocks && Object.keys(block.subBlocks).length > 0
-      });
     })
-
+    
     return nodeArray
   }, [JSON.stringify(workflowState.blocks), JSON.stringify(workflowState.loops), showSubBlocks])
 
@@ -157,13 +141,12 @@ export function WorkflowPreview({
     }))
   }, [JSON.stringify(workflowState.edges)])
 
-  useEffect(() => {
-    logger.info('Rendering workflow state', { workflowState })
-  }, [workflowState])
-
   return (
     <ReactFlowProvider>
-      <div style={{ height, width }} className={cn(className, 'preview-mode')}>
+      <div 
+        style={{ height, width }} 
+        className={cn(className, 'preview-mode')}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}

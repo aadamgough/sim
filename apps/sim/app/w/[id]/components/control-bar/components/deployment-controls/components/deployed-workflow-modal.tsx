@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,6 +35,12 @@ interface DeployedWorkflowModalProps {
     blocks: Record<string, any>
     edges: Array<any>
     loops: Record<string, any>
+    _metadata?: {
+      workflowId?: string
+      fetchTimestamp?: number
+      requestId?: number
+      [key: string]: any
+    }
   }
 }
 
@@ -47,6 +53,27 @@ export function DeployedWorkflowModal({
   const [isLoading, setIsLoading] = useState(false)
   const { revertToDeployedState } = useWorkflowStore()
   const activeWorkflowId = useWorkflowRegistry((state) => state.activeWorkflowId)
+  
+  // Add instance ID to track component lifecycle
+  const instanceId = useRef(Date.now());
+  const modalOpenCount = useRef(0);
+  
+  // Keep track of the original deployed state when modal opens
+  const initialDeployedStateRef = useRef<any>(null);
+  
+  useEffect(() => {
+    if (isOpen) {
+      modalOpenCount.current += 1;
+      
+      // Store the initial deployed state when modal first opens
+      if (!initialDeployedStateRef.current) {
+        initialDeployedStateRef.current = deployedWorkflowState;
+      }
+    } else if (initialDeployedStateRef.current) {
+      // Reset the initial state reference when modal closes
+      initialDeployedStateRef.current = null;
+    }
+  }, [isOpen, deployedWorkflowState, activeWorkflowId]);
 
   // Get current workflow state to compare with deployed state
   const currentWorkflowState = useWorkflowStore((state) => ({
@@ -59,11 +86,6 @@ export function DeployedWorkflowModal({
   const sanitizedCurrentState = useMemo(() => {
     if (!currentWorkflowState) return undefined;
     
-    logger.info('Before current state sanitization', {
-      workflowId: activeWorkflowId,
-      blockCount: Object.keys(currentWorkflowState.blocks || {}).length
-    });
-    
     const result = {
       blocks: Object.fromEntries(
         Object.entries(currentWorkflowState.blocks || {})
@@ -74,13 +96,13 @@ export function DeployedWorkflowModal({
           })
       ),
       edges: currentWorkflowState.edges ? [...currentWorkflowState.edges] : [],
-      loops: currentWorkflowState.loops ? {...currentWorkflowState.loops} : {}
+      loops: currentWorkflowState.loops ? {...currentWorkflowState.loops} : {},
+      _metadata: {
+        workflowId: activeWorkflowId || undefined,
+        type: 'current',
+        timestamp: Date.now()
+      }
     };
-    
-    logger.info('After current state sanitization', {
-      workflowId: activeWorkflowId,
-      blockCount: Object.keys(result.blocks).length
-    });
     
     return result;
   }, [currentWorkflowState, activeWorkflowId]);
@@ -89,10 +111,40 @@ export function DeployedWorkflowModal({
     if (!deployedWorkflowState) return {
       blocks: {},
       edges: [],
-      loops: {}
+      loops: {},
+      _metadata: {
+        workflowId: activeWorkflowId || undefined,
+        type: 'deployed-empty',
+        timestamp: Date.now()
+      }
     };
     
-    return {
+    const stateWorkflowId = deployedWorkflowState?._metadata?.workflowId;
+    const stateMatch = stateWorkflowId === activeWorkflowId;
+    
+    // Check if the deployed state belongs to the current workflow
+    // This is a critical safety check to prevent showing the wrong workflow state
+    if (stateWorkflowId && !stateMatch) {
+      logger.error('Attempted to use deployed state from wrong workflow', {
+        stateWorkflowId,
+        activeWorkflowId,
+      });
+      
+      // Return empty state to prevent showing wrong workflow data
+      return {
+        blocks: {},
+        edges: [],
+        loops: {},
+        _metadata: {
+          workflowId: activeWorkflowId || undefined,
+          type: 'deployed-empty-mismatch',
+          originalWorkflowId: stateWorkflowId,
+          timestamp: Date.now()
+        }
+      };
+    }
+    
+    const result = {
       blocks: Object.fromEntries(
         Object.entries(deployedWorkflowState.blocks || {})
           .filter(([_, block]) => block && block.type)
@@ -102,39 +154,25 @@ export function DeployedWorkflowModal({
           })
       ),
       edges: deployedWorkflowState.edges ? [...deployedWorkflowState.edges] : [],
-      loops: deployedWorkflowState.loops ? {...deployedWorkflowState.loops} : {}
+      loops: deployedWorkflowState.loops ? {...deployedWorkflowState.loops} : {},
+      _metadata: {
+        ...(deployedWorkflowState._metadata || {}),
+        workflowId: deployedWorkflowState._metadata?.workflowId || activeWorkflowId || undefined,
+        type: 'deployed-sanitized',
+        sanitizedAt: Date.now()
+      }
     };
-  }, [deployedWorkflowState]);
+    
+    return result;
+  }, [deployedWorkflowState, activeWorkflowId]);
 
   const handleRevert = () => {
     if (activeWorkflowId) {
-      logger.info(`Reverting to deployed state for workflow: ${activeWorkflowId}`)
       revertToDeployedState(sanitizedDeployedState)
       setShowRevertDialog(false)
       onClose()
     }
   }
-
-  useEffect(() => {
-    if (isOpen && activeWorkflowId) {
-      logger.info('DeployedWorkflowModal opened', {
-        workflowId: activeWorkflowId,
-        deployedStateBlockCount: Object.keys(deployedWorkflowState?.blocks || {}).length,
-        currentStateBlockCount: Object.keys(currentWorkflowState?.blocks || {}).length,
-        deployedStateChecksum: JSON.stringify(deployedWorkflowState).length,
-        currentStateChecksum: JSON.stringify(currentWorkflowState).length
-      });
-      
-      // Log a sample of block IDs to verify they match expected workflow
-      const deployedBlockIds = Object.keys(deployedWorkflowState?.blocks || {}).slice(0, 2);
-      const currentBlockIds = Object.keys(currentWorkflowState?.blocks || {}).slice(0, 2);
-      
-      logger.info('State block samples', {
-        deployedBlockIds,
-        currentBlockIds
-      });
-    }
-  }, [isOpen, activeWorkflowId, deployedWorkflowState, currentWorkflowState]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
