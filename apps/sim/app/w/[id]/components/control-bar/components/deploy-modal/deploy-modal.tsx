@@ -28,6 +28,7 @@ import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import { ChatDeploy } from '@/app/w/[id]/components/control-bar/components/deploy-modal/components/chat-deploy/chat-deploy'
 import { DeployForm } from '@/app/w/[id]/components/control-bar/components/deploy-modal/components/deploy-form/deploy-form'
 import { DeploymentInfo } from '@/app/w/[id]/components/control-bar/components/deploy-modal/components/deployment-info/deployment-info'
+import { WorkflowState } from '@/stores/workflows/workflow/types'
 
 const logger = createLogger('DeployModal')
 
@@ -37,7 +38,7 @@ interface DeployModalProps {
   workflowId: string | null
   needsRedeployment: boolean
   setNeedsRedeployment: (value: boolean) => void
-  deployedState: any
+  deployedState: WorkflowState
   isLoadingDeployedState: boolean
   refetchDeployedState: () => Promise<void>
 }
@@ -307,7 +308,6 @@ export function DeployModal({
       setDeploymentInfo(newDeploymentInfo)
 
       // Fetch the updated deployed state after deployment
-      logger.info('Deployment successful, fetching initial deployed state')
       await refetchDeployedState()
 
       // No notification on successful deploy

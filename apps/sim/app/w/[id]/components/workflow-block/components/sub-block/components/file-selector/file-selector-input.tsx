@@ -14,17 +14,17 @@ import { JiraIssueInfo, JiraIssueSelector } from './components/jira-issue-select
 interface FileSelectorInputProps {
   blockId: string
   subBlock: SubBlockConfig
-  disabled?: boolean
+  disabled: boolean
   isPreview?: boolean
-  value?: string
+  previewValue?: any | null
 }
 
 export function FileSelectorInput({ 
   blockId, 
   subBlock, 
-  disabled = false,
+  disabled,
   isPreview = false,
-  value: propValue
+  previewValue
 }: FileSelectorInputProps) {
   const { getValue, setValue } = useSubBlockStore()
   const [selectedFileId, setSelectedFileId] = useState<string>('')
@@ -48,10 +48,13 @@ export function FileSelectorInput({
   const botToken = isDiscord ? (getValue(blockId, 'botToken') as string) || '' : ''
   const serverId = isDiscord ? (getValue(blockId, 'serverId') as string) || '' : ''
 
+  // Use preview value when in preview mode, otherwise use store value
+  const value = isPreview ? previewValue : getValue(blockId, subBlock.id)
+
   // Get the current value from the store or prop value if in preview mode
   useEffect(() => {
-    if (isPreview && propValue !== undefined) {
-      const value = propValue;
+    if (isPreview && previewValue !== undefined) {
+      const value = previewValue;
       if (value && typeof value === 'string') {
         if (isJira) {
           setSelectedIssueId(value);
@@ -73,7 +76,7 @@ export function FileSelectorInput({
         }
       }
     }
-  }, [blockId, subBlock.id, getValue, isJira, isDiscord, isPreview, propValue]);
+  }, [blockId, subBlock.id, getValue, isJira, isDiscord, isPreview, previewValue]);
 
   // Handle file selection
   const handleFileChange = (fileId: string, info?: any) => {

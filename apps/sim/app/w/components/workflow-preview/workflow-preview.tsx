@@ -22,22 +22,13 @@ import { LoopLabel } from '@/app/w/[id]/components/workflow-loop/components/loop
 import { createLoopNode } from '@/app/w/[id]/components/workflow-loop/workflow-loop'
 import { getBlock } from '@/blocks'
 import { cn } from '@/lib/utils'
+import { WorkflowState } from '@/stores/workflows/workflow/types'
 
 const logger = createLogger('WorkflowPreview')
 
 interface WorkflowPreviewProps {
   // The workflow state to render
-  workflowState: {
-    blocks: Record<string, any>
-    edges: Array<{
-      id: string
-      source: string
-      target: string
-      sourceHandle?: string
-      targetHandle?: string
-    }>
-    loops: Record<string, any>
-  }
+  workflowState: WorkflowState
   // Whether to show subblocks
   showSubBlocks?: boolean
   // Optional className for container styling
@@ -65,7 +56,6 @@ const edgeTypes: EdgeTypes = {
 export function WorkflowPreview({
   workflowState,
   showSubBlocks = true,
-  className,
   height = '100%',
   width = '100%',
   isPannable = false,
@@ -162,7 +152,7 @@ export function WorkflowPreview({
     <ReactFlowProvider>
       <div 
         style={{ height, width }} 
-        className={cn(className, 'preview-mode')}
+        className={cn('preview-mode')}
       >
         <ReactFlow
           nodes={nodes}
