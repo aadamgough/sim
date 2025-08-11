@@ -79,6 +79,7 @@ export class TriggerBlockHandler implements BlockHandler {
                   result[key] = value
                 }
               } else {
+                
                 // For other providers, keep existing logic (only copy objects)
                 if (typeof value === 'object' && value !== null) {
                   // Don't overwrite existing top-level properties
