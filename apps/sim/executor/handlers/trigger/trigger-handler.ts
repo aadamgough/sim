@@ -69,20 +69,14 @@ export class TriggerBlockHandler implements BlockHandler {
             for (const [key, value] of Object.entries(providerData)) {
               // Special handling for GitHub provider - copy all properties
               if (provider === 'github') {
-                // For GitHub, copy all properties (objects and primitives) to root level
-                if (!result[key]) {
-                  // Special handling for complex objects that might have enumeration issues
-                  if (typeof value === 'object' && value !== null) {
-                    try {
-                      // Deep clone complex objects to avoid reference issues
-                      result[key] = JSON.parse(JSON.stringify(value))
-                    } catch (error) {
-                      // If JSON serialization fails, try direct assignment
-                      result[key] = value
-                    }
-                  } else {
-                    result[key] = value
-                  }
+                // For GitHub complex objects, convert to JSON strings
+                const githubObjects = ['repository', 'sender', 'pusher', 'head_commit']
+                if (githubObjects.includes(key) && typeof value === 'object' && value !== null) {
+                  // Convert complex objects to JSON strings
+                  result[key] = JSON.stringify(value)
+                } else {
+                  // Copy primitives normally
+                  result[key] = value
                 }
               } else {
                 // For other providers, keep existing logic (only copy objects)
