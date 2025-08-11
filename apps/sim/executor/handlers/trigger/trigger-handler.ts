@@ -90,30 +90,21 @@ export class TriggerBlockHandler implements BlockHandler {
               }
             }
 
-            // Keep nested structure for backwards compatibility
-            result[provider] = providerData
-
-            // Special handling for GitHub complex objects
+            // For GitHub, also update the nested provider object to contain stringified versions
             if (provider === 'github') {
+              const updatedProviderData = { ...providerData }
               const githubObjects = ['repository', 'sender', 'pusher', 'head_commit']
-
+              
               for (const objName of githubObjects) {
-                let objectValue = null
-
-                // Try to find the object from various sources
-                if (providerData[objName]) {
-                  objectValue = providerData[objName]
-                } else if (starterOutput.webhook?.data?.payload?.[objName]) {
-                  objectValue = starterOutput.webhook.data.payload[objName]
-                }
-
-                // Convert to JSON string for reliable access (like commits)
-                if (objectValue !== null && objectValue !== undefined) {
-                  result[objName] = JSON.stringify(objectValue)
+                if (updatedProviderData[objName] && typeof updatedProviderData[objName] === 'object') {
+                  updatedProviderData[objName] = JSON.stringify(updatedProviderData[objName])
                 }
               }
               
-              // Keep commits as is (already works as both array and string)
+              result[provider] = updatedProviderData
+            } else {
+              // Keep nested structure for backwards compatibility
+              result[provider] = providerData
             }
           }
 
