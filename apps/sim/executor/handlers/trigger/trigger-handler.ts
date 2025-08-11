@@ -125,9 +125,20 @@ export class TriggerBlockHandler implements BlockHandler {
                   }
                 }
 
-                // FORCE the object to root level (removed the !result[objName] condition)
+                // FORCE the object to root level with multiple strategies
                 if (objectValue !== null && objectValue !== undefined) {
-                  result[objName] = objectValue
+                  try {
+                    // Strategy 1: Deep clone to avoid reference issues
+                    result[objName] = JSON.parse(JSON.stringify(objectValue))
+                    
+                    // Strategy 2: Also provide as JSON string for compatibility (like commits)
+                    if (typeof objectValue === 'object' && objName !== 'commits') {
+                      result[`${objName}_json`] = JSON.stringify(objectValue)
+                    }
+                  } catch (e) {
+                    // Fallback: direct assignment
+                    result[objName] = objectValue
+                  }
                 }
               }
             }
