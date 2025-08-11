@@ -105,6 +105,7 @@ export const githubWebhookTrigger: TriggerConfig = {
       description: 'Branch name extracted from ref',
     },
   },
+  
 
   instructions: [
     'Go to your GitHub Repository > Settings > Webhooks.',
