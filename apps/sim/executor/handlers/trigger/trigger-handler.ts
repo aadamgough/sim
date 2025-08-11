@@ -98,44 +98,27 @@ export class TriggerBlockHandler implements BlockHandler {
             // Keep nested structure for backwards compatibility
             result[provider] = providerData
 
-            // Special handling for GitHub complex objects that might not be copied by the main loop
+            // Special handling for GitHub complex objects
             if (provider === 'github') {
-              // Comprehensive GitHub object extraction from multiple possible sources
-              const githubObjects = ['repository', 'sender', 'pusher', 'commits', 'head_commit']
+              const githubObjects = ['repository', 'sender', 'pusher', 'head_commit']
 
               for (const objName of githubObjects) {
-                // ALWAYS try to get the object, even if something exists (fix for conflicts)
                 let objectValue = null
 
-                // Source 1: Direct from provider data
+                // Try to find the object from various sources
                 if (providerData[objName]) {
                   objectValue = providerData[objName]
-                }
-                // Source 2: From webhook payload (raw GitHub webhook)
-                else if (starterOutput.webhook?.data?.payload?.[objName]) {
+                } else if (starterOutput.webhook?.data?.payload?.[objName]) {
                   objectValue = starterOutput.webhook.data.payload[objName]
                 }
-                // Source 3: For commits, try parsing JSON string version if no object found
-                else if (objName === 'commits' && typeof result.commits === 'string') {
-                  try {
-                    objectValue = JSON.parse(result.commits)
-                  } catch (e) {
-                    // Keep as string if parsing fails
-                    objectValue = result.commits
-                  }
-                }
 
-                // Deep clone complex objects to ensure they're accessible and have no reference issues
+                // Convert to JSON string for reliable access (like commits)
                 if (objectValue !== null && objectValue !== undefined) {
-                  try {
-                    // Use JSON serialization to create a clean, accessible copy
-                    result[objName] = JSON.parse(JSON.stringify(objectValue))
-                  } catch (e) {
-                    // If deep cloning fails, try direct assignment as fallback
-                    result[objName] = objectValue
-                  }
+                  result[objName] = JSON.stringify(objectValue)
                 }
               }
+              
+              // Keep commits as is (already works as both array and string)
             }
           }
 
